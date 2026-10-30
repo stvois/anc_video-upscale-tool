@@ -1,0 +1,36 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Downloaded engines, models, and processing caches
+_video_upscaler_tools/
+VideoUpscalerAI/
+.video_upscaler_cache/
+cache/
+tools/
+
+# Generated media
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+*.m4v
+*.ts
+*.mts
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# Local environment and editor files
+.env
+.venv/
+venv/
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
