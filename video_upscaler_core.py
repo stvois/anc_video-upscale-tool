@@ -108,22 +108,24 @@ def find_ffprobe() -> str:
 
 
 def find_realesrgan() -> str:
-    root = TOOLS_DIR / "realesrgan"
-    if not root.exists():
-        return ""
-    for candidate in root.rglob("realesrgan-ncnn-vulkan.exe"):
-        if (candidate.parent / "models" / "realesrgan-x4plus.param").is_file():
-            return str(candidate)
+    roots = [APP_DIR / "tools" / "realesrgan", TOOLS_DIR / "realesrgan"]
+    for root in roots:
+        if not root.exists():
+            continue
+        for candidate in root.rglob("realesrgan-ncnn-vulkan.exe"):
+            if (candidate.parent / "models" / "realesrgan-x4plus.param").is_file():
+                return str(candidate)
     return ""
 
 
 def find_rife() -> str:
-    root = TOOLS_DIR / "rife"
-    if not root.exists():
-        return ""
-    for candidate in root.rglob("rife-ncnn-vulkan.exe"):
-        if (candidate.parent / "rife-v4.6").is_dir():
-            return str(candidate)
+    roots = [APP_DIR / "tools" / "rife", TOOLS_DIR / "rife"]
+    for root in roots:
+        if not root.exists():
+            continue
+        for candidate in root.rglob("rife-ncnn-vulkan.exe"):
+            if (candidate.parent / "rife-v4.6").is_dir():
+                return str(candidate)
     return ""
 
 

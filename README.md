@@ -43,6 +43,14 @@ Python 소스 대신 단일 실행 파일이 필요하면 PowerShell에서 다�
 
 `dist\VideoUpscaler.exe`가 생성됩니다. EXE에는 Python/Tkinter와 AI 엔진 설치 스크립트가 포함되므로 실행 PC에 Python이 필요하지 않습니다. AI 모델은 처음 실행 후 **AI 엔진 설치** 버튼으로 내려받습니다. FFmpeg가 PATH에 없으면 `ffmpeg.exe`와 `ffprobe.exe`를 EXE 옆이나 `ffmpeg\bin` 폴더에 둘 수 있습니다.
 
+Python, FFmpeg, Real-ESRGAN과 RIFE 필요 모델을 한 폴더에 포함한 포터블 ZIP은 다음 명령으로 생성합니다.
+
+```powershell
+.\build_portable.ps1
+```
+
+결과물은 `dist\VideoUpscaler-Portable`과 `dist\VideoUpscaler-Portable.zip`입니다. 압축을 풀고 `VideoUpscaler.exe`를 실행하면 별도 설치 없이 AI 업스케일과 프레임 보간을 사용할 수 있습니다.
+
 ## 권장 설정
 
 - 일반 실사: `2배`, `실사 / 범용`, 노이즈 `약하게`, H.265 `균형`
@@ -63,6 +71,7 @@ Python 소스 대신 단일 실행 파일이 필요하면 PowerShell에서 다�
 - `setup_video_ai_engines.ps1`: 공식 릴리스에서 AI 엔진 설치
 - `run_video_upscaler.bat`: Python 자동 감지 및 실행
 - `build_exe.ps1`: PyInstaller 단일 EXE 빌드
+- `build_portable.ps1`: FFmpeg와 선별 AI 모델을 포함한 포터블 패키지 빌드
 
 ## 제3자 구성 요소
 
