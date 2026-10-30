@@ -1,6 +1,6 @@
-# AI Video Upscaler (Windows)
+# AI Video & Image Upscaler (Windows)
 
-Windows용 로컬 영상 업스케일링 GUI입니다. Python GUI에서 FFmpeg와 독립 실행형 Real-ESRGAN/RIFE 엔진을 호출하며, 별도의 Python 패키지는 필요하지 않습니다.
+Windows용 로컬 영상·이미지 업스케일링 GUI입니다. Python GUI에서 FFmpeg와 독립 실행형 Real-ESRGAN/RIFE 엔진을 호출하며, 별도의 Python 패키지는 필요하지 않습니다.
 
 ## 주요 기능
 
@@ -12,6 +12,10 @@ Windows용 로컬 영상 업스케일링 GUI입니다. Python GUI에서 FFmpeg�
 - MP4 H.264/H.265 및 MKV 출력
 - 오디오, 자막, 메타데이터 보존
 - 중단 후 이어하기 캐시
+- PNG/JPG/WebP 이미지 2배/4배 업스케일
+- 단일 이미지 및 폴더 일괄 처리
+- PNG/WebP 투명도 보존, JPG 흰색 배경 합성
+- 기존 결과 자동 건너뛰기와 폴더 일괄 이어하기
 - 한글 Windows 사용자명과 이동식 프로그램 폴더 지원
 
 실사 모델의 2배 처리는 일부 ncnn 버전의 타일 좌표 오류를 피하기 위해 내부적으로 4배 AI 추론 후 Lanczos 2배 축소를 적용합니다.
@@ -29,7 +33,9 @@ Windows용 로컬 영상 업스케일링 GUI입니다. Python GUI에서 FFmpeg�
 2. `run_video_upscaler.bat --check`로 Python 감지를 확인합니다.
 3. `run_video_upscaler.bat`을 더블 클릭합니다.
 4. 처음 한 번은 우측 상단의 **AI 엔진 설치**를 누릅니다.
-5. 입력 영상, 확대 배율, 영상 종류, 출력 형식을 선택하고 실행합니다.
+5. 영상 또는 이미지 탭에서 입력, 확대 배율, 종류, 출력 형식을 선택하고 실행합니다.
+
+이미지는 파일 하나를 선택하거나 폴더 전체를 한 번에 처리할 수 있습니다. 이미지/폴더를 `VideoUpscaler.exe` 위에 끌어놓아 바로 열 수도 있습니다.
 
 AI 엔진 설치 전에도 `일반 고품질 (Lanczos)` 모드는 사용할 수 있습니다.
 
@@ -49,13 +55,15 @@ Python, FFmpeg, Real-ESRGAN과 RIFE 필요 모델을 한 폴더에 포함한 포
 .\build_portable.ps1
 ```
 
-결과물은 `dist\VideoUpscaler-Portable`과 `dist\VideoUpscaler-Portable.zip`입니다. 압축을 풀고 `VideoUpscaler.exe`를 실행하면 별도 설치 없이 AI 업스케일과 프레임 보간을 사용할 수 있습니다.
+결과물은 `dist\VideoUpscaler-Portable`과 `dist\VideoUpscaler-Portable.zip`입니다. 압축을 풀고 `VideoUpscaler.exe`를 실행하면 별도 설치 없이 영상·이미지 AI 업스케일과 프레임 보간을 사용할 수 있습니다.
 
 ## 권장 설정
 
 - 일반 실사: `2배`, `실사 / 범용`, 노이즈 `약하게`, H.265 `균형`
 - 이미 깨끗한 AI 생성 실사: 노이즈 `사용 안 함`
 - 애니메이션: `2배`, `애니메이션 / 일러스트`, 노이즈 `사용 안 함`
+- 사진: 이미지 탭의 `실사 / 범용`, PNG 또는 고품질 JPG
+- 일러스트·투명 PNG: `애니메이션 / 일러스트`, PNG 출력
 - 자막과 여러 오디오 트랙을 안전하게 보존하려면 MKV 사용
 
 ## 저장 위치와 이동
@@ -67,7 +75,7 @@ Python, FFmpeg, Real-ESRGAN과 RIFE 필요 모델을 한 폴더에 포함한 포
 ## 구성
 
 - `video_upscaler_gui.py`: Tkinter GUI
-- `video_upscaler_core.py`: 영상 처리 파이프라인
+- `video_upscaler_core.py`: 영상·이미지 처리 파이프라인
 - `setup_video_ai_engines.ps1`: 공식 릴리스에서 AI 엔진 설치
 - `run_video_upscaler.bat`: Python 자동 감지 및 실행
 - `build_exe.ps1`: PyInstaller 단일 EXE 빌드
