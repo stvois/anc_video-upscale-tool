@@ -31,6 +31,7 @@ from video_upscaler_core import (
     APP_DIR,
     PipelineCancelled,
     PipelineError,
+    RESOURCE_DIR,
     UpscaleSettings,
     VideoUpscalePipeline,
     engine_status,
@@ -291,7 +292,7 @@ class VideoUpscalerApp:
         if self.install_process and self.install_process.poll() is None:
             messagebox.showinfo("설치 진행 중", "AI 엔진을 설치하고 있습니다.")
             return
-        script = APP_DIR / "setup_video_ai_engines.ps1"
+        script = RESOURCE_DIR / "setup_video_ai_engines.ps1"
         if not script.exists():
             messagebox.showerror("설치 파일 없음", str(script))
             return

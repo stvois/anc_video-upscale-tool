@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from functools import lru_cache
@@ -22,7 +23,9 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 
-APP_DIR = Path(__file__).resolve().parent
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+APP_DIR = Path(sys.executable).resolve().parent if IS_FROZEN else Path(__file__).resolve().parent
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR)).resolve()
 
 
 def _default_user_data_dir() -> Path:
@@ -95,11 +98,13 @@ def find_program(name: str, extra_roots: Iterable[Path] = ()) -> str:
 
 
 def find_ffmpeg() -> str:
-    return find_program("ffmpeg.exe") or find_program("ffmpeg")
+    local_roots = [APP_DIR, APP_DIR / "ffmpeg", APP_DIR / "bin"]
+    return find_program("ffmpeg.exe", local_roots) or find_program("ffmpeg", local_roots)
 
 
 def find_ffprobe() -> str:
-    return find_program("ffprobe.exe") or find_program("ffprobe")
+    local_roots = [APP_DIR, APP_DIR / "ffmpeg", APP_DIR / "bin"]
+    return find_program("ffprobe.exe", local_roots) or find_program("ffprobe", local_roots)
 
 
 def find_realesrgan() -> str:

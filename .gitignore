@@ -34,3 +34,9 @@ venv/
 Thumbs.db
 desktop.ini
 
+# PyInstaller output
+build/
+dist/
+*.spec
+
+
