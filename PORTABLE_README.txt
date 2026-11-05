@@ -12,6 +12,12 @@ AI Video & Image Upscaler - Portable
 - 기존 결과 덮어쓰기를 끄면 이미 처리한 파일을 건너뛰어 이어서 실행합니다.
 - 이미지 파일이나 폴더를 VideoUpscaler.exe 위에 끌어놓아 열 수 있습니다.
 
+영상 노이즈 제거:
+- 영상 노이즈 제거 탭은 해상도와 FPS를 유지하고 얼룩·압축 노이즈만 정리합니다.
+- 기본값은 균형 (클린 영상 권장), H.265 10비트, 고화질입니다.
+- 색 띠/밴딩 완화는 그라데이션이 계단처럼 뭉친 영상에서만 켜는 것을 권장합니다.
+- 이 기능은 FFmpeg 기반이라 AI 엔진이나 Vulkan GPU 없이도 사용할 수 있습니다.
+
 포함 구성:
 - Python/Tkinter가 포함된 VideoUpscaler.exe
 - FFmpeg/ffprobe GPL shared Windows build

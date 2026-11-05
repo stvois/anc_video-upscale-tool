@@ -37,6 +37,8 @@ from video_upscaler_core import (
     PipelineError,
     RESOURCE_DIR,
     UpscaleSettings,
+    VideoDenoisePipeline,
+    VideoDenoiseSettings,
     VideoUpscalePipeline,
     engine_status,
     format_duration,
@@ -57,12 +59,18 @@ OUTPUT_FORMATS = {
 QUALITY_MODES = {"고화질 / 큰 용량": "high", "균형": "balanced", "작은 용량": "small"}
 IMAGE_OUTPUT_FORMATS = {"PNG (투명도/무손실)": "png", "JPG (작은 용량)": "jpg", "WebP": "webp"}
 IMAGE_QUALITY = {"최고 품질": 96, "고품질": 92, "균형": 85, "작은 용량": 75}
+CLEAN_STRENGTHS = {
+    "약하게 (디테일 우선)": "light",
+    "균형 (클린 영상 권장)": "balanced",
+    "강하게 (심한 노이즈)": "strong",
+}
+CLEAN_CODECS = {"H.265 10비트 (권장)": "h265", "H.264 (호환성 우선)": "h264"}
 
 
 class VideoUpscalerApp:
     def __init__(self, root: Tk) -> None:
         self.root = root
-        self.root.title("AI 영상·이미지 업스케일러")
+        self.root.title("AI 영상 클린·업스케일러")
         self.root.geometry("980x820")
         self.root.minsize(860, 740)
 
@@ -94,9 +102,18 @@ class VideoUpscalerApp:
         self.image_overwrite = BooleanVar(value=False)
         self.image_info_text = StringVar(value="이미지 파일 또는 폴더를 선택하세요.")
 
+        self.clean_input_path = StringVar()
+        self.clean_output_path = StringVar()
+        self.clean_strength = StringVar(value="균형 (클린 영상 권장)")
+        self.clean_deband = BooleanVar(value=False)
+        self.clean_codec = StringVar(value="H.265 10비트 (권장)")
+        self.clean_quality = StringVar(value="고화질 / 큰 용량")
+        self.clean_hardware_encode = BooleanVar(value=True)
+        self.clean_info_text = StringVar(value="영상을 선택하면 원본 해상도와 FPS를 표시합니다.")
+
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.worker: threading.Thread | None = None
-        self.pipeline: VideoUpscalePipeline | ImageUpscalePipeline | None = None
+        self.pipeline: VideoUpscalePipeline | ImageUpscalePipeline | VideoDenoisePipeline | None = None
         self.cancel_event = threading.Event()
         self.install_process: subprocess.Popen[str] | None = None
 
@@ -115,7 +132,7 @@ class VideoUpscalerApp:
 
         title_row = Frame(outer)
         title_row.pack(fill=X)
-        Label(title_row, text="AI 영상·이미지 업스케일러", font=("Malgun Gothic", 17, "bold")).pack(side=LEFT)
+        Label(title_row, text="AI 영상 클린·업스케일러", font=("Malgun Gothic", 17, "bold")).pack(side=LEFT)
         Button(title_row, text="AI 엔진 설치", command=self._install_engines, width=14).pack(side=RIGHT)
         Label(outer, textvariable=self.engine_text, anchor="w", fg="#555555").pack(fill=X, pady=(2, 10))
 
@@ -123,11 +140,14 @@ class VideoUpscalerApp:
         self.notebook.pack(fill=X)
         self.video_tab = Frame(self.notebook, padx=10, pady=10)
         self.image_tab = Frame(self.notebook, padx=10, pady=10)
+        self.clean_tab = Frame(self.notebook, padx=10, pady=10)
         self.notebook.add(self.video_tab, text="영상 업스케일")
         self.notebook.add(self.image_tab, text="이미지 업스케일")
+        self.notebook.add(self.clean_tab, text="영상 노이즈 제거")
 
         self._build_video_tab()
         self._build_image_tab()
+        self._build_clean_tab()
 
         progress_box = LabelFrame(outer, text="진행 상태", padx=10, pady=8)
         progress_box.pack(fill=X, pady=(10, 0))
@@ -145,7 +165,7 @@ class VideoUpscalerApp:
 
         self.log = scrolledtext.ScrolledText(outer, height=12, wrap="word", font=("Consolas", 9))
         self.log.pack(fill=BOTH, expand=True)
-        self._append_log("영상 또는 이미지 탭에서 입력 파일과 설정을 선택한 뒤 업스케일을 시작하세요.\n")
+        self._append_log("영상·이미지 업스케일 또는 영상 노이즈 제거 탭에서 작업을 선택하세요.\n")
         self._append_log("이미지 폴더 모드는 이미 존재하는 결과를 건너뛰어 중단 후 이어서 처리할 수 있습니다.\n")
 
     def _build_video_tab(self) -> None:
@@ -212,6 +232,44 @@ class VideoUpscalerApp:
             anchor="w",
             fg="#666666",
         ).pack(fill=X, pady=(2, 0))
+
+    def _build_clean_tab(self) -> None:
+        files = LabelFrame(self.clean_tab, text="클린 처리할 영상", padx=10, pady=8)
+        files.pack(fill=X)
+        self._file_row(files, "입력 영상", self.clean_input_path, self._choose_clean_input)
+        self._file_row(files, "출력 영상", self.clean_output_path, self._choose_clean_output)
+        Label(files, textvariable=self.clean_info_text, anchor="w", justify=LEFT, fg="#2f5d80").pack(
+            fill=X, pady=(3, 0)
+        )
+
+        options = LabelFrame(self.clean_tab, text="노이즈 제거 설정", padx=10, pady=8)
+        options.pack(fill=X, pady=(10, 0))
+        row = Frame(options)
+        row.pack(fill=X, pady=3)
+        self._option(row, "제거 강도", self.clean_strength, list(CLEAN_STRENGTHS), menu_width=24)
+        self._option(row, "출력 코덱", self.clean_codec, list(CLEAN_CODECS), menu_width=22)
+        self._option(row, "압축 품질", self.clean_quality, list(QUALITY_MODES))
+        checks = Frame(options)
+        checks.pack(fill=X, pady=(7, 2))
+        Checkbutton(
+            checks,
+            text="색 띠/밴딩도 완화 (그라데이션이 뭉칠 때만 사용)",
+            variable=self.clean_deband,
+        ).pack(side=LEFT, padx=(0, 18))
+        Checkbutton(
+            checks,
+            text="NVIDIA 하드웨어 인코딩",
+            variable=self.clean_hardware_encode,
+        ).pack(side=LEFT)
+        Label(
+            options,
+            text=(
+                "해상도와 FPS는 바꾸지 않고 얼룩·압축 노이즈만 제거합니다. "
+                "제공한 clean 영상과 가장 가까운 값은 ‘균형’입니다."
+            ),
+            anchor="w",
+            fg="#666666",
+        ).pack(fill=X, pady=(5, 0))
 
     def _file_row(self, parent: Frame, text: str, variable: StringVar, command) -> None:
         row = Frame(parent)
@@ -308,8 +366,54 @@ class VideoUpscalerApp:
             keep_cache=self.keep_cache.get(),
         )
 
+    def _choose_clean_input(self) -> None:
+        path = filedialog.askopenfilename(
+            title="노이즈를 제거할 영상 선택",
+            filetypes=[("영상 파일", "*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.ts *.mts"), ("모든 파일", "*.*")],
+        )
+        if not path:
+            return
+        self.clean_input_path.set(path)
+        source = Path(path)
+        self.clean_output_path.set(str(source.with_name(f"{source.stem}_clean.mp4")))
+        self.clean_info_text.set("영상 정보를 분석하는 중...")
+
+        def worker() -> None:
+            try:
+                self.events.put(("clean_probe", probe_video(path)))
+            except Exception as exc:
+                self.events.put(("clean_probe_error", str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _choose_clean_output(self) -> None:
+        initial = self.clean_output_path.get()
+        path = filedialog.asksaveasfilename(
+            title="클린 영상 저장",
+            defaultextension=".mp4",
+            initialdir=str(Path(initial).parent) if initial else "",
+            initialfile=Path(initial).name if initial else "clean.mp4",
+            filetypes=[("MP4 영상", "*.mp4")],
+        )
+        if path:
+            self.clean_output_path.set(path)
+
+    def _clean_settings(self) -> VideoDenoiseSettings:
+        return VideoDenoiseSettings(
+            input_path=self.clean_input_path.get().strip(),
+            output_path=self.clean_output_path.get().strip(),
+            strength=CLEAN_STRENGTHS[self.clean_strength.get()],
+            deband=self.clean_deband.get(),
+            codec=CLEAN_CODECS[self.clean_codec.get()],
+            quality=QUALITY_MODES[self.clean_quality.get()],
+            hardware_encode=self.clean_hardware_encode.get(),
+        )
+
     def _is_image_tab(self) -> bool:
         return self.notebook.index(self.notebook.select()) == 1
+
+    def _is_clean_tab(self) -> bool:
+        return self.notebook.index(self.notebook.select()) == 2
 
     def _choose_image_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -407,7 +511,9 @@ class VideoUpscalerApp:
         )
 
     def _start(self) -> None:
-        if self._is_image_tab():
+        if self._is_clean_tab():
+            self._start_clean()
+        elif self._is_image_tab():
             self._start_image()
         else:
             self._start_video()
@@ -500,6 +606,45 @@ class VideoUpscalerApp:
         self.worker = threading.Thread(target=worker, daemon=True)
         self.worker.start()
 
+    def _start_clean(self) -> None:
+        if self.worker and self.worker.is_alive():
+            return
+        if not self.clean_input_path.get() or not Path(self.clean_input_path.get()).is_file():
+            messagebox.showerror("입력 영상 없음", "노이즈를 제거할 영상을 선택해 주세요.")
+            return
+        if not self.clean_output_path.get():
+            messagebox.showerror("출력 경로 없음", "클린 영상의 출력 경로를 선택해 주세요.")
+            return
+        self.cancel_event.clear()
+        self.progress_value.set(0)
+        self.run_button.config(state="disabled")
+        self.stop_button.config(state="normal")
+        self.status_text.set("노이즈 제거 준비 중")
+        settings = self._clean_settings()
+
+        def emit_log(message: str) -> None:
+            self.events.put(("log", message))
+
+        def emit_progress(value: float, message: str) -> None:
+            self.events.put(("progress", (value, message)))
+
+        def worker() -> None:
+            try:
+                self.pipeline = VideoDenoisePipeline(settings, emit_log, emit_progress, self.cancel_event)
+                result = self.pipeline.run()
+                self.events.put(("clean_complete", str(result)))
+            except PipelineCancelled as exc:
+                self.events.put(("cancelled", str(exc)))
+            except (PipelineError, OSError, ValueError) as exc:
+                self.events.put(("error", str(exc)))
+            except Exception as exc:
+                self.events.put(("error", f"예상하지 못한 노이즈 제거 오류: {exc}"))
+            finally:
+                self.pipeline = None
+
+        self.worker = threading.Thread(target=worker, daemon=True)
+        self.worker.start()
+
     def _stop(self) -> None:
         if not (self.worker and self.worker.is_alive()):
             return
@@ -552,7 +697,9 @@ class VideoUpscalerApp:
         threading.Thread(target=install_worker, daemon=True).start()
 
     def _open_output_folder(self) -> None:
-        if self._is_image_tab() and self.image_output_path.get():
+        if self._is_clean_tab() and self.clean_output_path.get():
+            target = Path(self.clean_output_path.get()).parent
+        elif self._is_image_tab() and self.image_output_path.get():
             image_output = Path(self.image_output_path.get())
             target = image_output if self.image_input_kind.get() == "folder" else image_output.parent
         else:
@@ -625,6 +772,14 @@ class VideoUpscalerApp:
                 )
             elif event == "probe_error":
                 self.video_info_text.set(f"영상 분석 실패: {payload}")
+            elif event == "clean_probe":
+                info = payload
+                self.clean_info_text.set(
+                    f"{info.width}x{info.height} 유지  |  {info.fps:.3f}fps 유지  |  "
+                    f"{format_duration(info.duration)}  |  약 {info.frame_count:,}프레임"
+                )
+            elif event == "clean_probe_error":
+                self.clean_info_text.set(f"영상 분석 실패: {payload}")
             elif event == "image_probe":
                 info = payload
                 scale = SCALES[self.image_scale.get()]
@@ -657,6 +812,12 @@ class VideoUpscalerApp:
                     detail = "새로 생성할 이미지가 없습니다. 기존 결과를 모두 건너뛰었습니다."
                 self._set_idle()
                 messagebox.showinfo("이미지 업스케일 완료", f"{detail}\n\n출력: {result_data['output']}")
+            elif event == "clean_complete":
+                self.progress_value.set(100)
+                self.status_text.set("완료")
+                self._append_log(f"클린 영상: {payload}")
+                self._set_idle()
+                messagebox.showinfo("노이즈 제거 완료", f"클린 영상이 생성되었습니다.\n\n{payload}")
             elif event == "cancelled":
                 self.status_text.set("중지됨 — 다음 실행에서 이어할 수 있습니다")
                 self._append_log(str(payload))

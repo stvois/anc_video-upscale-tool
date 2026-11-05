@@ -7,6 +7,8 @@ from video_upscaler_core import (
     ImageUpscalePipeline,
     ImageUpscaleSettings,
     UpscaleSettings,
+    VideoDenoisePipeline,
+    VideoDenoiseSettings,
     VideoUpscalePipeline,
     _parse_ffmpeg_time,
     format_duration,
@@ -57,6 +59,16 @@ class VideoUpscalerCoreTests(unittest.TestCase):
             settings = ImageUpscaleSettings(str(source), str(source / "out"), backend="lanczos")
             inputs = ImageUpscalePipeline(settings)._collect_inputs()
             self.assertEqual([path.name for path in inputs], ["original.png"])
+
+    def test_clean_video_balanced_filter_matches_reference_preset(self) -> None:
+        settings = VideoDenoiseSettings("input.mp4", "output.mp4", strength="balanced")
+        self.assertEqual(VideoDenoisePipeline(settings)._video_filter(), "hqdn3d=3:3:8:8")
+
+    def test_clean_video_deband_is_optional(self) -> None:
+        settings = VideoDenoiseSettings("input.mp4", "output.mp4", strength="light", deband=True)
+        filter_chain = VideoDenoisePipeline(settings)._video_filter()
+        self.assertIn("hqdn3d=1.5:1.5:6:6", filter_chain)
+        self.assertIn("gradfun=strength=1.0:radius=16", filter_chain)
 
 
 if __name__ == "__main__":

@@ -102,6 +102,17 @@ class ImageUpscaleSettings:
     tile_size: int = 0
 
 
+@dataclass(frozen=True)
+class VideoDenoiseSettings:
+    input_path: str
+    output_path: str
+    strength: str = "balanced"
+    deband: bool = False
+    codec: str = "h265"
+    quality: str = "high"
+    hardware_encode: bool = True
+
+
 @dataclass
 class ImageInfo:
     width: int
@@ -772,6 +783,237 @@ class VideoUpscalePipeline:
         self._run_process(command, line_callback=on_line)
         if not output.exists() or output.stat().st_size == 0:
             raise PipelineError("최종 영상 파일이 생성되지 않았습니다.")
+        self.log(f"완료: {output}")
+        return output
+
+
+class VideoDenoisePipeline:
+    """Clean compression blotches/noise without changing resolution or FPS."""
+
+    FILTERS = {
+        "light": "hqdn3d=1.5:1.5:6:6",
+        # This preset is intentionally identical to the existing medium
+        # extraction filter. It best matched the supplied clean reference.
+        "balanced": "hqdn3d=3:3:8:8",
+        "strong": "hqdn3d=4.5:4.5:10:10",
+    }
+
+    def __init__(
+        self,
+        settings: VideoDenoiseSettings,
+        log: Callable[[str], None] | None = None,
+        progress: Callable[[float, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
+        self.settings = settings
+        self.log = log or (lambda _message: None)
+        self.progress = progress or (lambda _value, _message: None)
+        self.cancel_event = cancel_event or threading.Event()
+        self.current_process: subprocess.Popen[str] | None = None
+        self.ffmpeg = find_ffmpeg()
+        self.ffprobe = find_ffprobe()
+        self.info: VideoInfo | None = None
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+        process = self.current_process
+        if process and process.poll() is None:
+            try:
+                process.terminate()
+            except OSError:
+                pass
+
+    def _check_cancelled(self) -> None:
+        if self.cancel_event.is_set():
+            raise PipelineCancelled("사용자가 노이즈 제거 작업을 중지했습니다.")
+
+    def validate(self) -> None:
+        source = Path(self.settings.input_path)
+        output = Path(self.settings.output_path)
+        if not source.is_file():
+            raise PipelineError("입력 영상 파일을 찾을 수 없습니다.")
+        if source.resolve() == output.resolve():
+            raise PipelineError("입력 파일과 출력 파일은 같을 수 없습니다.")
+        if self.settings.strength not in self.FILTERS:
+            raise PipelineError("지원하지 않는 노이즈 제거 강도입니다.")
+        if self.settings.codec not in {"h264", "h265"}:
+            raise PipelineError("지원하지 않는 영상 코덱입니다.")
+        if not self.ffmpeg or not self.ffprobe:
+            raise PipelineError("FFmpeg/ffprobe를 찾지 못했습니다.")
+        output.parent.mkdir(parents=True, exist_ok=True)
+
+    def _video_filter(self) -> str:
+        filters = [self.FILTERS[self.settings.strength]]
+        if self.settings.deband:
+            filters.append("gradfun=strength=1.0:radius=16")
+        return ",".join(filters)
+
+    def _encoder_args(self) -> list[str]:
+        quality = {
+            "high": {"cpu": "17", "nv": "16"},
+            "balanced": {"cpu": "20", "nv": "19"},
+            "small": {"cpu": "24", "nv": "23"},
+        }.get(self.settings.quality, {"cpu": "17", "nv": "16"})
+        if self.settings.hardware_encode and nvenc_available():
+            if self.settings.codec == "h265":
+                return [
+                    "-c:v",
+                    "hevc_nvenc",
+                    "-profile:v",
+                    "main10",
+                    "-pix_fmt",
+                    "p010le",
+                    "-preset",
+                    "p7",
+                    "-tune",
+                    "hq",
+                    "-rc:v",
+                    "vbr",
+                    "-cq:v",
+                    quality["nv"],
+                    "-b:v",
+                    "0",
+                    "-tag:v",
+                    "hvc1",
+                ]
+            return [
+                "-c:v",
+                "h264_nvenc",
+                "-pix_fmt",
+                "yuv420p",
+                "-preset",
+                "p7",
+                "-tune",
+                "hq",
+                "-rc:v",
+                "vbr",
+                "-cq:v",
+                quality["nv"],
+                "-b:v",
+                "0",
+            ]
+        if self.settings.codec == "h265":
+            return [
+                "-c:v",
+                "libx265",
+                "-preset",
+                "medium",
+                "-crf",
+                quality["cpu"],
+                "-pix_fmt",
+                "yuv420p10le",
+                "-tag:v",
+                "hvc1",
+            ]
+        return [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "slow",
+            "-crf",
+            quality["cpu"],
+            "-pix_fmt",
+            "yuv420p",
+        ]
+
+    def _run_process(self, command: list[str]) -> None:
+        self._check_cancelled()
+        startupinfo = None
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        self.current_process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            startupinfo=startupinfo,
+        )
+        recent: list[str] = []
+        assert self.current_process.stdout is not None
+        for raw_line in self.current_process.stdout:
+            line = raw_line.strip()
+            if line:
+                recent.append(line)
+                recent = recent[-20:]
+                if line.startswith("out_time=") and self.info is not None:
+                    raw_time = line.split("=", 1)[1]
+                    if raw_time != "N/A":
+                        ratio = _parse_ffmpeg_time(raw_time) / max(0.001, self.info.duration)
+                        self.progress(min(0.99, ratio), "노이즈 제거 및 인코딩")
+            if self.cancel_event.is_set():
+                self.cancel()
+                break
+        return_code = self.current_process.wait()
+        self.current_process = None
+        self._check_cancelled()
+        if return_code != 0:
+            raise PipelineError(
+                f"노이즈 제거 프로그램 실행이 실패했습니다 (코드 {return_code}).\n" + "\n".join(recent[-20:])
+            )
+
+    def run(self) -> Path:
+        self.validate()
+        self.progress(0.0, "영상 정보 분석")
+        self.info = probe_video(self.settings.input_path, self.ffprobe)
+        output = Path(self.settings.output_path).resolve()
+        partial = output.with_name(f"{output.stem}.partial{output.suffix}")
+        if partial.exists():
+            partial.unlink()
+        self.log(
+            f"입력: {self.info.width}x{self.info.height}, {self.info.fps:.3f}fps, "
+            f"{format_duration(self.info.duration)}"
+        )
+        self.log("해상도와 FPS를 유지하며 노이즈만 제거합니다.")
+        self.log(f"필터: {self._video_filter()}")
+        command = [
+            self.ffmpeg,
+            "-hide_banner",
+            "-y",
+            "-i",
+            self.settings.input_path,
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+        ]
+        supported_subtitles = [
+            stream for stream in self.info.subtitle_streams if stream.get("codec_name") in TEXT_SUBTITLE_CODECS
+        ]
+        for stream in supported_subtitles:
+            command.extend(["-map", f"0:{stream['index']}"])
+        if self.info.subtitle_streams and len(supported_subtitles) < len(self.info.subtitle_streams):
+            self.log("주의: MP4와 호환되지 않는 이미지 자막은 제외했습니다.")
+        command.extend(["-vf", self._video_filter(), "-c:a", "aac", "-b:a", "320k"])
+        if supported_subtitles:
+            command.extend(["-c:s", "mov_text"])
+        command.extend(self._encoder_args())
+        command.extend(
+            [
+                "-map_metadata",
+                "0",
+                "-map_chapters",
+                "0",
+                "-movflags",
+                "+faststart",
+                str(partial),
+                "-progress",
+                "pipe:1",
+                "-nostats",
+            ]
+        )
+        try:
+            self._run_process(command)
+            if not partial.is_file() or partial.stat().st_size == 0:
+                raise PipelineError("노이즈 제거 결과 파일이 생성되지 않았습니다.")
+            os.replace(partial, output)
+        finally:
+            if partial.exists():
+                partial.unlink()
+        self.progress(1.0, "완료")
         self.log(f"완료: {output}")
         return output
 
