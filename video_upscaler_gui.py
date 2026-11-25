@@ -48,6 +48,7 @@ from video_upscaler_core import (
 
 
 SCALES = {"2배": 2, "4배": 4}
+DETAIL_PRESERVE = {"사용 안 함 (AI 100%)": 0, "원본 30% (권장 시작값)": 30, "원본 50%": 50, "원본 70% (형태 우선)": 70}
 CONTENT_MODES = {"실사 / 범용": "real", "애니메이션 / 일러스트": "anime"}
 DENOISE_MODES = {"사용 안 함": "none", "약하게": "low", "보통": "medium", "강하게": "high"}
 BACKENDS = {"AI (Real-ESRGAN)": "ai", "일반 고품질 (Lanczos)": "lanczos"}
@@ -85,6 +86,7 @@ class VideoUpscalerApp:
         self.interpolation = BooleanVar(value=False)
         self.hardware_encode = BooleanVar(value=True)
         self.keep_cache = BooleanVar(value=True)
+        self.detail_preserve = StringVar(value="사용 안 함 (AI 100%)")
         self.status_text = StringVar(value="준비")
         self.progress_value = DoubleVar(value=0.0)
         self.engine_text = StringVar()
@@ -187,6 +189,10 @@ class VideoUpscalerApp:
         self._option(row2, "처리 방식", self.backend, list(BACKENDS))
         self._option(row2, "출력 형식", self.output_format, list(OUTPUT_FORMATS), menu_width=25)
         self._option(row2, "압축 품질", self.quality, list(QUALITY_MODES))
+        detail_row = Frame(options)
+        detail_row.pack(fill=X, pady=3)
+        self._option(detail_row, "원본 보존", self.detail_preserve, list(DETAIL_PRESERVE), menu_width=28)
+        Label(detail_row, text="AI 모드 전용 · 가는 선 보존 / 원본 노이즈도 섞일 수 있음", fg="#666666").pack(side=LEFT)
 
         checks = Frame(options)
         checks.pack(fill=X, pady=(6, 2))
@@ -364,6 +370,7 @@ class VideoUpscalerApp:
             quality=QUALITY_MODES[self.quality.get()],
             hardware_encode=self.hardware_encode.get(),
             keep_cache=self.keep_cache.get(),
+            detail_preserve=DETAIL_PRESERVE[self.detail_preserve.get()],
         )
 
     def _choose_clean_input(self) -> None:

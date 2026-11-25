@@ -73,6 +73,7 @@ class UpscaleSettings:
     quality: str = "balanced"
     hardware_encode: bool = True
     keep_cache: bool = True
+    detail_preserve: int = 0
     tile_size: int = 0
 
 
@@ -373,6 +374,7 @@ class VideoUpscalePipeline:
             "mode": self.settings.content_mode,
             "denoise": self.settings.denoise,
             "backend": self.settings.backend,
+            "detail_preserve": self.settings.detail_preserve,
         }
         digest = hashlib.sha256(json.dumps(signature, sort_keys=True).encode("utf-8")).hexdigest()[:16]
         # Several ncnn Windows builds cannot open paths containing Korean or
@@ -453,6 +455,8 @@ class VideoUpscalePipeline:
             raise PipelineError("입력 파일과 출력 파일은 같을 수 없습니다.")
         if self.settings.scale not in {2, 4}:
             raise PipelineError("확대 배율은 2배 또는 4배여야 합니다.")
+        if not 0 <= self.settings.detail_preserve <= 100:
+            raise PipelineError("원본 디테일 보존 비율은 0~100이어야 합니다.")
         if not self.ffmpeg or not self.ffprobe:
             raise PipelineError("FFmpeg/ffprobe를 찾지 못했습니다.")
         if self.settings.backend == "ai" and not self.realesrgan:
@@ -474,6 +478,8 @@ class VideoUpscalePipeline:
 
         self._extract_frames()
         self._upscale_frames()
+        if self.settings.detail_preserve and self.settings.backend == "ai":
+            self.upscaled_frames = self._preserve_details()
         final_frames = self.upscaled_frames
         final_fps = self.info.fps
         if self.settings.interpolation:
@@ -485,6 +491,49 @@ class VideoUpscalePipeline:
             shutil.rmtree(self.cache_dir, ignore_errors=True)
             self.log("임시 캐시를 정리했습니다.")
         return output
+
+    def _preserve_details(self) -> Path:
+        assert self.info is not None
+        target = self.cache_dir / "frames_detail_preserved"
+        marker = target / ".complete"
+        expected = len(list(self.upscaled_frames.glob("*.png")))
+        if marker.exists() and len(list(target.glob("*.png"))) == expected:
+            self.log("원본 디테일 보존: 캐시 재사용")
+            return target
+        if target.exists():
+            shutil.rmtree(target)
+        target.mkdir(parents=True)
+        weight = self.settings.detail_preserve / 100
+        self.log(f"원본 디테일 보존: AI {100-self.settings.detail_preserve}% + 원본 Lanczos {self.settings.detail_preserve}%")
+        width = self.info.width * self.settings.scale
+        height = self.info.height * self.settings.scale
+        command = [
+            self.ffmpeg, "-hide_banner", "-y",
+            "-framerate", f"{self.info.fps:.8f}", "-start_number", "1",
+            "-i", str(self.upscaled_frames / "%08d.png"),
+            "-i", self.settings.input_path,
+            "-filter_complex",
+            f"[0:v]setpts=PTS-STARTPTS,format=rgb24[ai];"
+            f"[1:v:0]setpts=PTS-STARTPTS,scale={width}:{height}:flags=lanczos,format=rgb24[orig];"
+            f"[ai][orig]blend=all_expr='A*{1-weight:.4f}+B*{weight:.4f}':shortest=1[out]",
+            "-map", "[out]", "-frames:v", str(expected),
+            "-fps_mode", "passthrough", "-start_number", "1",
+            str(target / "%08d.png"), "-progress", "pipe:1", "-nostats",
+        ]
+
+        def on_line(line: str) -> None:
+            if line.startswith("frame="):
+                try:
+                    done = int(line.split("=", 1)[1])
+                    self.progress(0.72, f"원본 디테일 보존 {done:,}/{expected:,}")
+                except ValueError:
+                    pass
+
+        self._run_process(command, line_callback=on_line)
+        if len(list(target.glob("*.png"))) != expected:
+            raise PipelineError("원본 디테일 보존 프레임 수가 예상과 다릅니다.")
+        marker.touch()
+        return target
 
     def _extract_frames(self) -> None:
         assert self.info is not None

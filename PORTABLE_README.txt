@@ -19,6 +19,7 @@ AI Video & Image Upscaler - Portable
 - 이 기능은 FFmpeg 기반이라 AI 엔진이나 Vulkan GPU 없이도 사용할 수 있습니다.
 
 포함 구성:
+- 영상 탭의 원본 보존: AI와 원본 Lanczos 확대를 혼합 (30%/50%/70%). 가는 장신구는 30%부터 테스트하세요.
 - Python/Tkinter가 포함된 VideoUpscaler.exe
 - FFmpeg/ffprobe GPL shared Windows build
 - Real-ESRGAN 실행 파일과 실사/애니메이션 필수 모델
