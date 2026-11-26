@@ -19,6 +19,7 @@ AI Video & Image Upscaler - Portable
 - 이 기능은 FFmpeg 기반이라 AI 엔진이나 Vulkan GPU 없이도 사용할 수 있습니다.
 
 포함 구성:
+- 고정밀 AI (16비트 SDR)는 별도 엔진 설치가 필요합니다. Python 3.10 및 인터넷 필요, CPU 실행은 느릴 수 있습니다.
 - 영상 탭의 원본 보존: AI와 원본 Lanczos 확대를 혼합 (30%/50%/70%). 가는 장신구는 30%부터 테스트하세요.
 - Python/Tkinter가 포함된 VideoUpscaler.exe
 - FFmpeg/ffprobe GPL shared Windows build

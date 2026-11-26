@@ -460,6 +460,22 @@ class VideoUpscalePipeline:
             raise PipelineError("원본 디테일 보존 비율은 0~100이어야 합니다.")
         if not self.ffmpeg or not self.ffprobe:
             raise PipelineError("FFmpeg/ffprobe를 찾지 못했습니다.")
+        if self.settings.backend == "precision":
+            if not (USER_DATA_DIR / "precision/Scripts/python.exe").is_file():
+                raise PipelineError("고정밀 엔진이 없습니다. '고정밀 엔진 설치'를 먼저 실행하세요. Python 3.10이 필요합니다.")
+            if self.settings.codec != "h265_10":
+                raise PipelineError("고정밀 AI는 H.265 10비트 출력 형식을 선택하세요.")
+            model = "realesr-animevideov3" if self.settings.content_mode == "anime" else "RealESRGAN_x4plus"
+            if not (USER_DATA_DIR / "precision/models" / f"{model}.pth").is_file():
+                raise PipelineError("고정밀 모델이 없습니다. 고정밀 엔진 설치를 완료해 주세요.")
+            if self.settings.interpolation or self.settings.denoise != "none":
+                raise PipelineError("고정밀 AI에서는 RIFE를 끄고 노이즈 제거를 '사용 안 함'으로 선택하세요.")
+            color = subprocess.check_output([
+                self.ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                "stream=color_transfer,color_primaries", "-of", "json", self.settings.input_path,
+            ], creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+            if any(value in color.decode() for value in ("smpte2084", "arib-std-b67", "bt2020")):
+                raise PipelineError("고정밀 모드는 SDR BT.709용입니다. HDR/BT.2020 입력은 아직 지원하지 않습니다.")
         if self.settings.backend == "ai" and not self.realesrgan:
             raise PipelineError("Real-ESRGAN AI 엔진이 없습니다. 먼저 'AI 엔진 설치'를 실행해 주세요.")
         if self.settings.interpolation and not self.rife:
@@ -569,6 +585,8 @@ class VideoUpscalePipeline:
         ]
         if filters:
             command.extend(["-vf", ",".join(filters)])
+        if self.settings.backend == "precision":
+            command.extend(["-pix_fmt", "rgb48be"])
         command.extend(["-start_number", "1", str(self.input_frames / "%08d.png"), "-progress", "pipe:1", "-nostats"])
         self.log("1/4 원본 프레임 추출 중...")
 
@@ -607,6 +625,22 @@ class VideoUpscalePipeline:
             self.progress(0.72, "업스케일 프레임 캐시 재사용")
             return
         self.log(f"2/4 업스케일 시작: 완료 {completed:,} / 전체 {len(inputs):,}")
+        if self.settings.backend == "precision":
+            model = "realesr-animevideov3" if self.settings.content_mode == "anime" else "RealESRGAN_x4plus"
+            command = [str(USER_DATA_DIR / "precision/Scripts/python.exe"),
+                       str(RESOURCE_DIR / "precision_upscale.py"),
+                       "--input", str(self.input_frames), "--output", str(self.upscaled_frames),
+                       "--model", str(USER_DATA_DIR / "precision/models" / f"{model}.pth"),
+                       "--scale", str(self.settings.scale), "--preserve", str(self.settings.detail_preserve)]
+            def update(line: str) -> None:
+                if line.startswith("FRAME="):
+                    done = int(line.split("=", 1)[1].split("/")[0])
+                    self.progress(0.15 + 0.57 * done / len(inputs), f"고정밀 AI {done}/{len(inputs)}")
+                else:
+                    self.log(line)
+            self._run_process(command, line_callback=update)
+            self.progress(0.72, "16비트 프레임 처리 완료")
+            return
         if self.settings.backend == "lanczos":
             self._upscale_lanczos(inputs)
             return
@@ -822,6 +856,8 @@ class VideoUpscalePipeline:
             if supported_subtitles:
                 command.extend(["-c:s", "mov_text"])
         command.extend(self._encoder_args())
+        if self.settings.backend == "precision":
+            command.extend(["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709"])
         if self.settings.codec != "h265_10":
             command.extend(["-pix_fmt", "yuv420p"])
         command.extend(["-map_metadata", "1", "-map_chapters", "1"])

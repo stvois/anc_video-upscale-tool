@@ -52,6 +52,7 @@ DETAIL_PRESERVE = {"사용 안 함 (AI 100%)": 0, "원본 30% (권장 시작값)
 CONTENT_MODES = {"실사 / 범용": "real", "애니메이션 / 일러스트": "anime"}
 DENOISE_MODES = {"사용 안 함": "none", "약하게": "low", "보통": "medium", "강하게": "high"}
 BACKENDS = {"AI (Real-ESRGAN)": "ai", "일반 고품질 (Lanczos)": "lanczos"}
+VIDEO_BACKENDS = {**BACKENDS, "고정밀 AI (16비트 SDR)": "precision"}
 OUTPUT_FORMATS = {
     "MP4 H.265 10비트": ("h265_10", ".mp4"),
     "MKV H.265 10비트": ("h265_10", ".mkv"),
@@ -139,6 +140,7 @@ class VideoUpscalerApp:
         title_row.pack(fill=X)
         Label(title_row, text="AI 영상 클린·업스케일러", font=("Malgun Gothic", 17, "bold")).pack(side=LEFT)
         Button(title_row, text="AI 엔진 설치", command=self._install_engines, width=14).pack(side=RIGHT)
+        Button(title_row, text="고정밀 엔진 설치", command=lambda: self._install_engines(True), width=16).pack(side=RIGHT)
         Label(outer, textvariable=self.engine_text, anchor="w", fg="#555555").pack(fill=X, pady=(2, 10))
 
         self.notebook = ttk.Notebook(outer)
@@ -189,10 +191,10 @@ class VideoUpscalerApp:
         self._option(row1, "노이즈 제거", self.denoise, list(DENOISE_MODES))
         row2 = Frame(options)
         row2.pack(fill=X, pady=3)
-        self._option(row2, "처리 방식", self.backend, list(BACKENDS))
+        self._option(row2, "처리 방식", self.backend, list(VIDEO_BACKENDS))
         self._option(row2, "출력 형식", self.output_format, list(OUTPUT_FORMATS), menu_width=25)
         self._option(row2, "압축 품질", self.quality, list(QUALITY_MODES))
-        Label(options, text="10비트 출력: AI 중간 처리는 8비트입니다. HDR 색상 보존은 지원하지 않습니다.", fg="#666666", anchor="w").pack(fill=X)
+        Label(options, text="고정밀 AI: SDR 전용 · 10비트 출력 선택 · 노이즈/RIFE 끔. 일반 AI 중간 처리는 8비트입니다.", fg="#666666", anchor="w").pack(fill=X)
         detail_row = Frame(options)
         detail_row.pack(fill=X, pady=3)
         self._option(detail_row, "원본 보존", self.detail_preserve, list(DETAIL_PRESERVE), menu_width=28)
@@ -372,7 +374,7 @@ class VideoUpscalerApp:
             scale=SCALES[self.scale.get()],
             content_mode=CONTENT_MODES[self.content_mode.get()],
             denoise=DENOISE_MODES[self.denoise.get()],
-            backend=BACKENDS[self.backend.get()],
+            backend=VIDEO_BACKENDS[self.backend.get()],
             interpolation=self.interpolation.get(),
             codec=codec,
             quality=QUALITY_MODES[self.quality.get()],
@@ -673,17 +675,17 @@ class VideoUpscalerApp:
         self.run_button.config(state="normal")
         self.stop_button.config(state="disabled")
 
-    def _install_engines(self) -> None:
+    def _install_engines(self, precision: bool = False) -> None:
         if self.install_process and self.install_process.poll() is None:
             messagebox.showinfo("설치 진행 중", "AI 엔진을 설치하고 있습니다.")
             return
-        script = RESOURCE_DIR / "setup_video_ai_engines.ps1"
+        script = RESOURCE_DIR / ("setup_precision.ps1" if precision else "setup_video_ai_engines.ps1")
         if not script.exists():
             messagebox.showerror("설치 파일 없음", str(script))
             return
         if not messagebox.askyesno(
             "AI 엔진 설치",
-            "공식 GitHub 릴리스에서 Real-ESRGAN과 RIFE를 내려받습니다.\n약 수백 MB의 저장 공간이 필요할 수 있습니다. 계속할까요?",
+            ("Python 3.10으로 PyTorch 고정밀 엔진과 모델을 설치합니다. 수 GB가 필요할 수 있습니다. 계속할까요?" if precision else "공식 GitHub 릴리스에서 AI 엔진을 내려받습니다. 계속할까요?"),
         ):
             return
         self._append_log("AI 엔진 설치를 시작합니다...")
@@ -848,7 +850,7 @@ class VideoUpscalerApp:
                 if int(payload) == 0:
                     self.status_text.set("AI 엔진 설치 완료")
                     self._append_log("AI 엔진 설치가 완료되었습니다.")
-                    messagebox.showinfo("설치 완료", "Real-ESRGAN과 RIFE 설치가 완료되었습니다.")
+                    messagebox.showinfo("설치 완료", "선택한 엔진 설치가 완료되었습니다.")
                 else:
                     self.status_text.set("AI 엔진 설치 실패")
                     messagebox.showerror("설치 실패", "로그를 확인해 주세요.")

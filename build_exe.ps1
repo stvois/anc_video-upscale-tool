@@ -38,6 +38,8 @@ try {
         --windowed `
         --name "VideoUpscaler" `
         --add-data "setup_video_ai_engines.ps1;." `
+        --add-data "setup_precision.ps1;." `
+        --add-data "precision_upscale.py;." `
         "video_upscaler_gui.py"
 
     if ($LASTEXITCODE -ne 0) {
