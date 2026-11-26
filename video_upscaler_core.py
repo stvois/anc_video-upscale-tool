@@ -101,6 +101,7 @@ class ImageUpscaleSettings:
     quality: int = 92
     overwrite: bool = False
     tile_size: int = 0
+    detail_preserve: int = 0
 
 
 @dataclass(frozen=True)
@@ -1278,6 +1279,21 @@ class ImageUpscalePipeline:
             shutil.copy2(ai_result, result)
         return result
 
+    def _preserve_details(self, source: Path, upscaled: Path, stage: Path, info: ImageInfo) -> Path:
+        weight = self.settings.detail_preserve / 100
+        result = stage / "detail_preserved.png"
+        width, height = info.width * self.settings.scale, info.height * self.settings.scale
+        self.log(f"원본 보존: AI {100-self.settings.detail_preserve}% + 원본 {self.settings.detail_preserve}%")
+        self._run_process([
+            self.ffmpeg, "-hide_banner", "-y", "-i", str(upscaled), "-i", str(source),
+            "-filter_complex",
+            f"[0:v]format=gbrap[ai];"
+            f"[1:v]scale={width}:{height}:flags=lanczos,format=gbrap[orig];"
+            f"[ai][orig]blend=all_expr='A*{1-weight:.4f}+B*{weight:.4f}':c3_expr=B,format=rgba[out]",
+            "-map", "[out]", "-frames:v", "1", "-c:v", "png", str(result),
+        ])
+        return result
+
     def _write_output(self, source: Path, target: Path, info: ImageInfo) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         quality = max(1, min(100, int(self.settings.quality)))
@@ -1366,6 +1382,10 @@ class ImageUpscalePipeline:
                 normalized = stage / "input.png"
                 self._normalize(source, normalized, info)
                 upscaled = self._upscale(normalized, stage)
+                if not 0 <= self.settings.detail_preserve <= 100:
+                    raise PipelineError("원본 보존 비율은 0~100이어야 합니다.")
+                if self.settings.detail_preserve and self.settings.backend == "ai":
+                    upscaled = self._preserve_details(source, upscaled, stage, info)
                 self._write_output(upscaled, target, info)
                 if not target.is_file() or target.stat().st_size == 0:
                     raise PipelineError(f"결과 이미지가 생성되지 않았습니다: {target}")

@@ -101,6 +101,7 @@ class VideoUpscalerApp:
         self.image_backend = StringVar(value="AI (Real-ESRGAN)")
         self.image_output_format = StringVar(value="PNG (투명도/무손실)")
         self.image_quality = StringVar(value="고품질")
+        self.image_detail_preserve = StringVar(value="원본 70% (형태 우선)")
         self.image_overwrite = BooleanVar(value=False)
         self.image_info_text = StringVar(value="이미지 파일 또는 폴더를 선택하세요.")
 
@@ -227,6 +228,10 @@ class VideoUpscalerApp:
         self._option(row2, "처리 방식", self.image_backend, list(BACKENDS))
         self._option(row2, "출력 형식", self.image_output_format, list(IMAGE_OUTPUT_FORMATS), menu_width=22)
         self._option(row2, "저장 품질", self.image_quality, list(IMAGE_QUALITY))
+        detail_row = Frame(options)
+        detail_row.pack(fill=X, pady=3)
+        self._option(detail_row, "원본 보존", self.image_detail_preserve, list(DETAIL_PRESERVE), menu_width=28)
+        Label(detail_row, text="AI 모드 전용 · 원본 노이즈도 섞일 수 있음", fg="#666666").pack(side=LEFT)
         Checkbutton(
             options,
             text="기존 결과 덮어쓰기 (해제 시 기존 파일을 건너뛰어 이어하기)",
@@ -514,6 +519,7 @@ class VideoUpscalerApp:
             backend=BACKENDS[self.image_backend.get()],
             output_format=IMAGE_OUTPUT_FORMATS[self.image_output_format.get()],
             quality=IMAGE_QUALITY[self.image_quality.get()],
+            detail_preserve=DETAIL_PRESERVE[self.image_detail_preserve.get()],
             overwrite=self.image_overwrite.get(),
         )
 
