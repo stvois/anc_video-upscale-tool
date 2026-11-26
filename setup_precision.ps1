@@ -7,8 +7,22 @@ if (-not (Test-Path -LiteralPath $Python)) {
     & py -3.10 -m venv $Precision
     if ($LASTEXITCODE -ne 0) { throw 'Python 3.10 is required for precision engine setup.' }
 }
-& $Python -m pip install torch torchvision spandrel opencv-python-headless
+$Nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+if ($Nvidia) {
+    Write-Output '[INFO] NVIDIA detected: installing CUDA 12.8 PyTorch.'
+    & $Python -m pip install 'torch==2.11.0' 'torchvision==0.26.0' --index-url https://download.pytorch.org/whl/cu128
+    if ($LASTEXITCODE -ne 0) { throw 'CUDA PyTorch installation failed.' }
+}
+else {
+    & $Python -m pip install 'torch==2.11.0' 'torchvision==0.26.0' --index-url https://download.pytorch.org/whl/cpu
+    if ($LASTEXITCODE -ne 0) { throw 'CPU PyTorch installation failed.' }
+}
+& $Python -m pip install spandrel opencv-python-headless
 if ($LASTEXITCODE -ne 0) { throw 'Precision dependencies installation failed.' }
+if ($Nvidia) {
+    & $Python -c "import torch; assert torch.cuda.is_available(), 'CUDA unavailable: check NVIDIA driver'; x=torch.ones((32,32),device='cuda'); print('CUDA READY:',torch.cuda.get_device_name(0),(x@x)[0,0].item())"
+    if ($LASTEXITCODE -ne 0) { throw 'CUDA verification failed. Check NVIDIA driver.' }
+}
 $Models = Join-Path $Precision 'models'
 New-Item -ItemType Directory -Force -Path $Models | Out-Null
 foreach ($Name in @('realesr-animevideov3','RealESRGAN_x4plus')) {

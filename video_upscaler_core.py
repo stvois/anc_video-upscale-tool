@@ -74,6 +74,7 @@ class UpscaleSettings:
     hardware_encode: bool = True
     keep_cache: bool = True
     detail_preserve: int = 0
+    precision_device: str = "auto"
     tile_size: int = 0
 
 
@@ -632,6 +633,7 @@ class VideoUpscalePipeline:
                        "--input", str(self.input_frames), "--output", str(self.upscaled_frames),
                        "--model", str(USER_DATA_DIR / "precision/models" / f"{model}.pth"),
                        "--scale", str(self.settings.scale), "--preserve", str(self.settings.detail_preserve)]
+            command.extend(["--device", self.settings.precision_device])
             def update(line: str) -> None:
                 if line.startswith("FRAME="):
                     done = int(line.split("=", 1)[1].split("/")[0])

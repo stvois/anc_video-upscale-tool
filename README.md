@@ -66,7 +66,9 @@ Python, FFmpeg, Real-ESRGAN과 RIFE 필요 모델을 한 폴더에 포함한 포
 
 ### SDR 고정밀 AI
 
-`고정밀 엔진 설치`로 Python 3.10 기반 전용 환경(PyTorch, Spandrel, OpenCV)과 공식 Real-ESRGAN 모델을 설치합니다. Python 3.10 및 인터넷이 필요하며, 엔진은 사용자 데이터 폴더의 `precision`에 별도 저장됩니다. 기본 pip PyTorch 배포를 사용하고 CUDA가 사용 가능하면 GPU, 아니면 CPU로 실행합니다. CPU는 긴 영상에 매우 느릴 수 있습니다. CUDA 구성은 별도이며 설치 성공이 GPU 사용을 의미하지 않습니다.
+NVIDIA PC에서는 `고정밀 엔진 설치`가 CUDA 12.8용 PyTorch 2.11.0/torchvision 0.26.0을 설치합니다. 기존 CPU 버전도 이 버튼으로 교체합니다. `고정밀 장치`의 자동은 NVIDIA 우선이며, NVIDIA GPU(CUDA)를 명시하면 CUDA가 없을 때 오류로 안내합니다. 로그의 `Device: cuda` 및 GPU 이름으로 AI 추론 장치를 확인하세요. NVIDIA 하드웨어 인코딩 체크는 최종 인코딩용이며 이 선택과 독립적입니다. CUDA 엔진은 별도 설치되어 포터블 ZIP 크기는 유지되지만 설치 시 수 GB가 추가됩니다.
+
+`고정밀 엔진 설치`로 Python 3.10 기반 전용 환경(PyTorch, Spandrel, OpenCV)과 공식 Real-ESRGAN 모델을 설치합니다. Python 3.10 및 인터넷이 필요하며, 엔진은 사용자 데이터 폴더의 `precision`에 별도 저장됩니다. NVIDIA 감지 시 CUDA 버전을 설치하고 실제 GPU 연산으로 확인합니다. CPU는 긴 영상에 매우 느릴 수 있습니다.
 
 영상 탭에서 `고정밀 AI (16비트 SDR)`, H.265 10비트, 노이즈 제거 사용 안 함, RIFE 끔을 선택하세요. 16비트 RGB PNG 추출 → float32 AI 및 원본 혼합 → 16비트 PNG → 10비트 출력 경로입니다. 실사와 애니메이션, 2배/4배를 지원합니다. 2배는 모델의 4배 추론 결과를 고정밀 축소합니다. 프레임 캐시 용량과 RAM 사용량이 증가합니다. HDR/BT.2020은 거부하며 BT.709 SDR용입니다. AI는 원본 색 정보의 무손실 보존을 보장하지 않습니다. 고정밀 엔진은 포터블 ZIP에 포함되지 않으므로 다른 PC에서 별도 설치해야 합니다.
 

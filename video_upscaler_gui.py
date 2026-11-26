@@ -53,6 +53,7 @@ CONTENT_MODES = {"실사 / 범용": "real", "애니메이션 / 일러스트": "a
 DENOISE_MODES = {"사용 안 함": "none", "약하게": "low", "보통": "medium", "강하게": "high"}
 BACKENDS = {"AI (Real-ESRGAN)": "ai", "일반 고품질 (Lanczos)": "lanczos"}
 VIDEO_BACKENDS = {**BACKENDS, "고정밀 AI (16비트 SDR)": "precision"}
+PRECISION_DEVICES = {"자동 (NVIDIA 우선)": "auto", "NVIDIA GPU (CUDA)": "cuda", "CPU": "cpu"}
 OUTPUT_FORMATS = {
     "MP4 H.265 10비트": ("h265_10", ".mp4"),
     "MKV H.265 10비트": ("h265_10", ".mkv"),
@@ -90,6 +91,7 @@ class VideoUpscalerApp:
         self.hardware_encode = BooleanVar(value=True)
         self.keep_cache = BooleanVar(value=False)
         self.detail_preserve = StringVar(value="원본 70% (형태 우선)")
+        self.precision_device = StringVar(value="자동 (NVIDIA 우선)")
         self.status_text = StringVar(value="준비")
         self.progress_value = DoubleVar(value=0.0)
         self.engine_text = StringVar()
@@ -198,7 +200,7 @@ class VideoUpscalerApp:
         detail_row = Frame(options)
         detail_row.pack(fill=X, pady=3)
         self._option(detail_row, "원본 보존", self.detail_preserve, list(DETAIL_PRESERVE), menu_width=28)
-        Label(detail_row, text="AI 모드 전용 · 가는 선 보존 / 원본 노이즈도 섞일 수 있음", fg="#666666").pack(side=LEFT)
+        self._option(detail_row, "고정밀 장치", self.precision_device, list(PRECISION_DEVICES), menu_width=22)
 
         checks = Frame(options)
         checks.pack(fill=X, pady=(6, 2))
@@ -381,6 +383,7 @@ class VideoUpscalerApp:
             hardware_encode=self.hardware_encode.get(),
             keep_cache=self.keep_cache.get(),
             detail_preserve=DETAIL_PRESERVE[self.detail_preserve.get()],
+            precision_device=PRECISION_DEVICES[self.precision_device.get()],
         )
 
     def _choose_clean_input(self) -> None:
@@ -685,7 +688,7 @@ class VideoUpscalerApp:
             return
         if not messagebox.askyesno(
             "AI 엔진 설치",
-            ("Python 3.10으로 PyTorch 고정밀 엔진과 모델을 설치합니다. 수 GB가 필요할 수 있습니다. 계속할까요?" if precision else "공식 GitHub 릴리스에서 AI 엔진을 내려받습니다. 계속할까요?"),
+            ("Python 3.10으로 고정밀 엔진을 설치합니다. NVIDIA 감지 시 CUDA 버전을 설치하며 수 GB가 필요합니다. 계속할까요?" if precision else "공식 GitHub 릴리스에서 AI 엔진을 내려받습니다. 계속할까요?"),
         ):
             return
         self._append_log("AI 엔진 설치를 시작합니다...")

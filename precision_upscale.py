@@ -1,5 +1,6 @@
 """External float32 / uint16 SDR inference worker; no 8-bit conversion."""
 import argparse
+import time
 from pathlib import Path
 import cv2
 import numpy as np
@@ -13,11 +14,18 @@ def main():
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--scale', type=int, default=2)
     parser.add_argument('--preserve', type=int, default=70)
+    parser.add_argument('--device', choices=('auto', 'cuda', 'cpu'), default='auto')
     args = parser.parse_args()
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = ('cuda' if torch.cuda.is_available() else 'cpu') if args.device == 'auto' else args.device
+    if device == 'cuda' and not torch.cuda.is_available():
+        raise RuntimeError('NVIDIA CUDA unavailable. Run precision engine setup and check driver.')
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
     torch.set_num_threads(4)
     model = ModelLoader().load_from_file(args.model).to(device).float().eval()
     print(f'Device: {device}; inference=float32; frames=uint16', flush=True)
+    if device == 'cuda':
+        print('NVIDIA GPU: ' + torch.cuda.get_device_name(0), flush=True)
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     files = sorted(Path(args.input).glob('*.png'))
@@ -25,6 +33,7 @@ def main():
         target = output / path.name
         if target.exists():
             continue
+        started = time.perf_counter()
         image = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
         if image is None or image.dtype != np.uint16 or image.ndim != 3:
             raise ValueError(f'Expected uint16 RGB input: {path}')
@@ -55,6 +64,7 @@ def main():
         temp = target.with_suffix('.tmp')
         data.tofile(temp)
         temp.replace(target)
+        print(f'Frame seconds: {time.perf_counter()-started:.3f}', flush=True)
         print(f'FRAME={index}/{len(files)}', flush=True)
 
 
