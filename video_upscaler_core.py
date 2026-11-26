@@ -315,7 +315,8 @@ def probe_image(path: str, ffprobe: str | None = None) -> ImageInfo:
         raise PipelineError("이미지 스트림을 찾지 못했습니다.")
     stream = streams[0]
     pixel_format = str(stream.get("pix_fmt") or "unknown")
-    alpha_formats = {"rgba", "bgra", "argb", "abgr", "gbrap", "gbrap10le", "gbrap12le", "gbrap16le"}
+    alpha_formats = {"rgba", "bgra", "argb", "abgr", "gbrap", "gbrap10le", "gbrap12le", "gbrap16le",
+                     "rgba64le", "rgba64be", "bgra64le", "bgra64be", "ya8", "ya16le", "ya16be", "pal8"}
     has_alpha = pixel_format in alpha_formats or pixel_format.startswith("yuva")
     return ImageInfo(
         width=int(stream.get("width") or 0),
@@ -1198,7 +1199,7 @@ class ImageUpscalePipeline:
         inputs = self._collect_inputs()
         if not inputs:
             raise PipelineError("처리할 이미지 파일을 찾지 못했습니다.")
-        if self.settings.scale not in {2, 4}:
+        if self.settings.scale not in ({1} if self.settings.backend == "denoise" else {2, 4}):
             raise PipelineError("확대 배율은 2배 또는 4배여야 합니다.")
         if self.settings.content_mode not in {"real", "anime"}:
             raise PipelineError("지원하지 않는 이미지 종류입니다.")
@@ -1442,6 +1443,49 @@ class ImageUpscalePipeline:
             return completed
         finally:
             shutil.rmtree(self.work_root, ignore_errors=True)
+
+
+class ImageDenoisePipeline(ImageUpscalePipeline):
+    """Spatial denoising at original resolution; preserve alpha separately."""
+
+    def validate(self) -> list[Path]:
+        if self.settings.backend != "denoise" or self.settings.scale != 1:
+            raise PipelineError("이미지 노이즈 제거는 원본 해상도 모드로 실행해야 합니다.")
+        if self.settings.denoise not in {"low", "medium", "high"}:
+            raise PipelineError("노이즈 제거 강도를 선택하세요.")
+        return super().validate()
+
+    def _collect_inputs(self) -> list[Path]:
+        source = Path(self.settings.input_path)
+        if source.is_file():
+            return [source]
+        if source.is_dir():
+            return sorted(p for p in source.iterdir() if p.is_file()
+                          and p.suffix.lower() in IMAGE_EXTENSIONS and not p.stem.lower().endswith("_clean"))
+        return []
+
+    def _targets(self, inputs: list[Path]) -> list[Path]:
+        if Path(self.settings.input_path).is_file():
+            return [Path(self.settings.output_path)]
+        # Include original extension to avoid collisions between a.jpg/a.png.
+        return [Path(self.settings.output_path) / f"{p.stem}_{p.suffix[1:].lower()}_clean.{self.settings.output_format}"
+                for p in inputs]
+
+    def _normalize(self, source: Path, target: Path, info: ImageInfo) -> None:
+        strength = {"low": 1.5, "medium": 3.0, "high": 5.0}[self.settings.denoise]
+        denoise = f"nlmeans=s={strength}:p=7:r=15"
+        command = [self.ffmpeg, "-hide_banner", "-y", "-i", str(source)]
+        if info.has_alpha:
+            command.extend(["-filter_complex",
+                f"[0:v]split[c][a];[c]format=rgb24,{denoise}[rgb];"
+                "[a]alphaextract[alpha];[rgb][alpha]alphamerge[out]", "-map", "[out]"])
+        else:
+            command.extend(["-vf", denoise])
+        command.extend(["-frames:v", "1", "-c:v", "png", str(target)])
+        self._run_process(command)
+
+    def _upscale(self, normalized: Path, stage: Path) -> Path:
+        return normalized
 
 
 def engine_status() -> dict[str, str]:

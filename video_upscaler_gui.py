@@ -32,6 +32,7 @@ from video_upscaler_core import (
     APP_DIR,
     IMAGE_EXTENSIONS,
     ImageUpscalePipeline,
+    ImageDenoisePipeline,
     ImageUpscaleSettings,
     PipelineCancelled,
     PipelineError,
@@ -109,6 +110,13 @@ class VideoUpscalerApp:
         self.image_detail_preserve = StringVar(value="원본 70% (형태 우선)")
         self.image_overwrite = BooleanVar(value=False)
         self.image_info_text = StringVar(value="이미지 파일 또는 폴더를 선택하세요.")
+        self.denoise_image_input = StringVar()
+        self.denoise_image_output = StringVar()
+        self.denoise_image_strength = StringVar(value="약하게")
+        self.denoise_image_format = StringVar(value="PNG (투명도/무손실)")
+        self.denoise_image_quality = StringVar(value="고품질")
+        self.denoise_image_overwrite = BooleanVar(value=False)
+        self.denoise_image_format.trace_add("write", lambda *_: self._default_denoise_image_output())
 
         self.clean_input_path = StringVar()
         self.clean_output_path = StringVar()
@@ -153,10 +161,13 @@ class VideoUpscalerApp:
         self.notebook.add(self.video_tab, text="영상 업스케일")
         self.notebook.add(self.image_tab, text="이미지 업스케일")
         self.notebook.add(self.clean_tab, text="영상 노이즈 제거")
+        self.denoise_image_tab = Frame(self.notebook, padx=10, pady=10)
+        self.notebook.add(self.denoise_image_tab, text="이미지 노이즈 제거")
 
         self._build_video_tab()
         self._build_image_tab()
         self._build_clean_tab()
+        self._build_denoise_image_tab()
 
         progress_box = LabelFrame(outer, text="진행 상태", padx=10, pady=8)
         progress_box.pack(fill=X, pady=(10, 0))
@@ -169,7 +180,7 @@ class VideoUpscalerApp:
         self.open_output_button.pack(side=LEFT)
         self.stop_button = Button(action_row, text="중지", command=self._stop, width=12, state="disabled")
         self.stop_button.pack(side=RIGHT, padx=(8, 0))
-        self.run_button = Button(action_row, text="업스케일 시작", command=self._start, width=17, height=2)
+        self.run_button = Button(action_row, text="처리 시작", command=self._start, width=17, height=2)
         self.run_button.pack(side=RIGHT)
 
         self.log = scrolledtext.ScrolledText(outer, height=12, wrap="word", font=("Consolas", 9))
@@ -250,6 +261,55 @@ class VideoUpscalerApp:
             anchor="w",
             fg="#666666",
         ).pack(fill=X, pady=(2, 0))
+
+    def _build_denoise_image_tab(self) -> None:
+        files = LabelFrame(self.denoise_image_tab, text="노이즈를 제거할 이미지 / 폴더", padx=10, pady=8)
+        files.pack(fill=X)
+        self._file_row(files, "입력", self.denoise_image_input, self._choose_denoise_image_file)
+        Button(files, text="폴더 일괄 선택", command=self._choose_denoise_image_folder).pack(anchor="w")
+        self._file_row(files, "출력", self.denoise_image_output, self._choose_denoise_image_output)
+        options = LabelFrame(self.denoise_image_tab, text="이미지 노이즈 제거 설정", padx=10, pady=8)
+        options.pack(fill=X, pady=(10, 0))
+        row = Frame(options)
+        row.pack(fill=X)
+        self._option(row, "제거 강도", self.denoise_image_strength, ["약하게", "보통", "강하게"])
+        self._option(row, "출력 형식", self.denoise_image_format, list(IMAGE_OUTPUT_FORMATS))
+        self._option(row, "저장 품질", self.denoise_image_quality, list(IMAGE_QUALITY))
+        Checkbutton(options, text="기존 결과 덮어쓰기", variable=self.denoise_image_overwrite).pack(anchor="w")
+        Label(options, text="원본 해상도 유지 · PNG/WebP 투명도 보존 · 강할수록 가는 선도 흐려질 수 있습니다.",
+              anchor="w", fg="#666666").pack(fill=X, pady=6)
+
+    def _default_denoise_image_output(self) -> None:
+        raw = self.denoise_image_input.get().strip()
+        if raw:
+            source = Path(raw)
+            suffix = IMAGE_OUTPUT_FORMATS[self.denoise_image_format.get()]
+            name = f"{source.name}_clean" if source.is_dir() else f"{source.stem}_clean.{suffix}"
+            self.denoise_image_output.set(str(source.with_name(name)))
+
+    def _choose_denoise_image_file(self) -> None:
+        path = filedialog.askopenfilename(title="노이즈 제거 이미지 선택",
+            filetypes=[("이미지", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff")])
+        if path:
+            self.denoise_image_input.set(path)
+            self._default_denoise_image_output()
+
+    def _choose_denoise_image_folder(self) -> None:
+        path = filedialog.askdirectory(title="노이즈 제거 이미지 폴더 선택")
+        if path:
+            self.denoise_image_input.set(path)
+            self._default_denoise_image_output()
+
+    def _choose_denoise_image_output(self) -> None:
+        if Path(self.denoise_image_input.get()).is_dir():
+            path = filedialog.askdirectory(title="결과 폴더 선택")
+        else:
+            suffix = IMAGE_OUTPUT_FORMATS[self.denoise_image_format.get()]
+            path = filedialog.asksaveasfilename(title="클린 이미지 저장", defaultextension=f".{suffix}",
+                initialfile=Path(self.denoise_image_output.get()).name,
+                filetypes=[(suffix.upper(), f"*.{suffix}")])
+        if path:
+            self.denoise_image_output.set(path)
 
     def _build_clean_tab(self) -> None:
         files = LabelFrame(self.clean_tab, text="클린 처리할 영상", padx=10, pady=8)
@@ -532,7 +592,9 @@ class VideoUpscalerApp:
         )
 
     def _start(self) -> None:
-        if self._is_clean_tab():
+        if self.notebook.select() == str(self.denoise_image_tab):
+            self._start_image(denoise_only=True)
+        elif self._is_clean_tab():
             self._start_clean()
         elif self._is_image_tab():
             self._start_image()
@@ -578,14 +640,16 @@ class VideoUpscalerApp:
         self.worker = threading.Thread(target=worker, daemon=True)
         self.worker.start()
 
-    def _start_image(self) -> None:
+    def _start_image(self, denoise_only: bool = False) -> None:
         if self.worker and self.worker.is_alive():
             return
-        source = Path(self.image_input_path.get().strip())
-        if not source.exists():
+        raw_input = self.denoise_image_input.get() if denoise_only else self.image_input_path.get()
+        source = Path(raw_input.strip())
+        if not raw_input.strip() or not source.exists():
             messagebox.showerror("입력 이미지 없음", "올바른 이미지 파일 또는 폴더를 선택해 주세요.")
             return
-        if not self.image_output_path.get().strip():
+        raw_output = self.denoise_image_output.get() if denoise_only else self.image_output_path.get()
+        if not raw_output.strip():
             messagebox.showerror("출력 경로 없음", "결과 이미지 경로를 선택해 주세요.")
             return
         self.cancel_event.clear()
@@ -593,7 +657,13 @@ class VideoUpscalerApp:
         self.run_button.config(state="disabled")
         self.stop_button.config(state="normal")
         self.status_text.set("이미지 작업 준비 중")
-        settings = self._image_settings()
+        settings = (ImageUpscaleSettings(
+            input_path=str(source), output_path=raw_output.strip(), scale=1, backend="denoise",
+            denoise=DENOISE_MODES[self.denoise_image_strength.get()],
+            output_format=IMAGE_OUTPUT_FORMATS[self.denoise_image_format.get()],
+            quality=IMAGE_QUALITY[self.denoise_image_quality.get()],
+            overwrite=self.denoise_image_overwrite.get(),
+        ) if denoise_only else self._image_settings())
 
         def emit_log(message: str) -> None:
             self.events.put(("log", message))
@@ -603,7 +673,8 @@ class VideoUpscalerApp:
 
         def worker() -> None:
             try:
-                self.pipeline = ImageUpscalePipeline(settings, emit_log, emit_progress, self.cancel_event)
+                pipeline_type = ImageDenoisePipeline if denoise_only else ImageUpscalePipeline
+                self.pipeline = pipeline_type(settings, emit_log, emit_progress, self.cancel_event)
                 results = self.pipeline.run()
                 self.events.put(
                     (
@@ -718,7 +789,10 @@ class VideoUpscalerApp:
         threading.Thread(target=install_worker, daemon=True).start()
 
     def _open_output_folder(self) -> None:
-        if self._is_clean_tab() and self.clean_output_path.get():
+        if self.notebook.select() == str(self.denoise_image_tab) and self.denoise_image_output.get():
+            output = Path(self.denoise_image_output.get())
+            target = output if Path(self.denoise_image_input.get()).is_dir() else output.parent
+        elif self._is_clean_tab() and self.clean_output_path.get():
             target = Path(self.clean_output_path.get()).parent
         elif self._is_image_tab() and self.image_output_path.get():
             image_output = Path(self.image_output_path.get())
@@ -832,7 +906,7 @@ class VideoUpscalerApp:
                 else:
                     detail = "새로 생성할 이미지가 없습니다. 기존 결과를 모두 건너뛰었습니다."
                 self._set_idle()
-                messagebox.showinfo("이미지 업스케일 완료", f"{detail}\n\n출력: {result_data['output']}")
+                messagebox.showinfo("이미지 처리 완료", f"{detail}\n\n출력: {result_data['output']}")
             elif event == "clean_complete":
                 self.progress_value.set(100)
                 self.status_text.set("완료")
