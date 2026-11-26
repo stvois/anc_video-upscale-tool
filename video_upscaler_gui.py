@@ -53,6 +53,8 @@ CONTENT_MODES = {"실사 / 범용": "real", "애니메이션 / 일러스트": "a
 DENOISE_MODES = {"사용 안 함": "none", "약하게": "low", "보통": "medium", "강하게": "high"}
 BACKENDS = {"AI (Real-ESRGAN)": "ai", "일반 고품질 (Lanczos)": "lanczos"}
 OUTPUT_FORMATS = {
+    "MP4 H.265 10비트": ("h265_10", ".mp4"),
+    "MKV H.265 10비트": ("h265_10", ".mkv"),
     "MP4 H.264 (호환성 우선)": ("h264", ".mp4"),
     "MP4 H.265 (용량 절약)": ("h265", ".mp4"),
     "MKV H.265 (모든 트랙 보존)": ("h265", ".mkv"),
@@ -190,6 +192,7 @@ class VideoUpscalerApp:
         self._option(row2, "처리 방식", self.backend, list(BACKENDS))
         self._option(row2, "출력 형식", self.output_format, list(OUTPUT_FORMATS), menu_width=25)
         self._option(row2, "압축 품질", self.quality, list(QUALITY_MODES))
+        Label(options, text="10비트 출력: AI 중간 처리는 8비트입니다. HDR 색상 보존은 지원하지 않습니다.", fg="#666666", anchor="w").pack(fill=X)
         detail_row = Frame(options)
         detail_row.pack(fill=X, pady=3)
         self._option(detail_row, "원본 보존", self.detail_preserve, list(DETAIL_PRESERVE), menu_width=28)

@@ -769,6 +769,12 @@ class VideoUpscalePipeline:
         return self.interpolated_frames
 
     def _encoder_args(self) -> list[str]:
+        if self.settings.codec == "h265_10":
+            return VideoDenoisePipeline(VideoDenoiseSettings(
+                self.settings.input_path, self.settings.output_path,
+                codec="h265", quality=self.settings.quality,
+                hardware_encode=self.settings.hardware_encode,
+            ))._encoder_args()
         quality = {
             "high": {"cpu": "17", "nv": "16"},
             "balanced": {"cpu": "20", "nv": "19"},
@@ -816,7 +822,9 @@ class VideoUpscalePipeline:
             if supported_subtitles:
                 command.extend(["-c:s", "mov_text"])
         command.extend(self._encoder_args())
-        command.extend(["-pix_fmt", "yuv420p", "-map_metadata", "1", "-map_chapters", "1"])
+        if self.settings.codec != "h265_10":
+            command.extend(["-pix_fmt", "yuv420p"])
+        command.extend(["-map_metadata", "1", "-map_chapters", "1"])
         if not is_mkv:
             command.extend(["-movflags", "+faststart"])
         command.extend([str(output), "-progress", "pipe:1", "-nostats"])
