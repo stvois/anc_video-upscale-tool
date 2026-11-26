@@ -103,6 +103,7 @@ class ImageUpscaleSettings:
     overwrite: bool = False
     tile_size: int = 0
     detail_preserve: int = 0
+    denoise_device: str = "cpu"
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,7 @@ class VideoDenoiseSettings:
     codec: str = "h265"
     quality: str = "high"
     hardware_encode: bool = True
+    original_keep: int = 0
 
 
 @dataclass
@@ -943,7 +945,14 @@ class VideoDenoisePipeline:
         filters = [self.FILTERS[self.settings.strength]]
         if self.settings.deband:
             filters.append("gradfun=strength=1.0:radius=16")
-        return ",".join(filters)
+        chain = ",".join(filters)
+        weight = self.settings.original_keep / 100
+        if not 0 <= weight <= 1:
+            raise PipelineError("원본 유지 비율은 0~100이어야 합니다.")
+        if weight:
+            return (f"format=yuv420p10le,split[orig][work];[work]{chain}[clean];"
+                    f"[clean][orig]blend=all_expr='A*{1-weight:.4f}+B*{weight:.4f}'")
+        return chain
 
     def _encoder_args(self) -> list[str]:
         quality = {
@@ -1453,6 +1462,10 @@ class ImageDenoisePipeline(ImageUpscalePipeline):
             raise PipelineError("이미지 노이즈 제거는 원본 해상도 모드로 실행해야 합니다.")
         if self.settings.denoise not in {"low", "medium", "high"}:
             raise PipelineError("노이즈 제거 강도를 선택하세요.")
+        if self.settings.denoise_device not in {"cpu", "nvidia"}:
+            raise PipelineError("지원하지 않는 이미지 노이즈 제거 장치입니다.")
+        if not 0 <= self.settings.detail_preserve <= 100:
+            raise PipelineError("원본 유지 비율은 0~100이어야 합니다.")
         return super().validate()
 
     def _collect_inputs(self) -> list[Path]:
@@ -1474,13 +1487,21 @@ class ImageDenoisePipeline(ImageUpscalePipeline):
     def _normalize(self, source: Path, target: Path, info: ImageInfo) -> None:
         strength = {"low": 1.5, "medium": 3.0, "high": 5.0}[self.settings.denoise]
         denoise = f"nlmeans=s={strength}:p=7:r=15"
-        command = [self.ffmpeg, "-hide_banner", "-y", "-i", str(source)]
-        if info.has_alpha:
-            command.extend(["-filter_complex",
-                f"[0:v]split[c][a];[c]format=rgb24,{denoise}[rgb];"
-                "[a]alphaextract[alpha];[rgb][alpha]alphamerge[out]", "-map", "[out]"])
+        command = [self.ffmpeg, "-hide_banner", "-y"]
+        if self.settings.denoise_device == "nvidia":
+            command.extend(["-init_hw_device", "vulkan=gpu:NVIDIA", "-filter_hw_device", "gpu"])
+            denoise = f"hwupload,nlmeans_vulkan=s={strength}:p=7:r=15,hwdownload,format=rgba"
+            self.log("이미지 노이즈 제거: NVIDIA GPU (Vulkan)")
         else:
-            command.extend(["-vf", denoise])
+            denoise = "format=rgb24," + denoise
+            self.log("이미지 노이즈 제거: CPU")
+        command.extend(["-i", str(source)])
+        weight = self.settings.detail_preserve / 100
+        graph = (f"[0:v]format=rgba,split=3[c][orig][a];[c]{denoise},format=rgb24[clean];"
+                 f"[orig]format=rgb24[original];[clean][original]blend=all_expr='A*{1-weight:.4f}+B*{weight:.4f}'[rgb];"
+                 "[a]alphaextract[alpha];[rgb][alpha]alphamerge[out]")
+        command.extend(["-filter_complex", graph, "-map", "[out]"])
+        self.log(f"원본 유지: {self.settings.detail_preserve}%")
         command.extend(["-frames:v", "1", "-c:v", "png", str(target)])
         self._run_process(command)
 

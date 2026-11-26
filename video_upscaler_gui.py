@@ -55,6 +55,8 @@ DENOISE_MODES = {"사용 안 함": "none", "약하게": "low", "보통": "medium
 BACKENDS = {"AI (Real-ESRGAN)": "ai", "일반 고품질 (Lanczos)": "lanczos"}
 VIDEO_BACKENDS = {**BACKENDS, "고정밀 AI (16비트 SDR)": "precision"}
 PRECISION_DEVICES = {"자동 (NVIDIA 우선)": "auto", "NVIDIA GPU (CUDA)": "cuda", "CPU": "cpu"}
+ORIGINAL_KEEP = {"사용 안 함": 0, "원본 30%": 30, "원본 50%": 50, "원본 70% (형태 우선)": 70}
+IMAGE_DENOISE_DEVICES = {"NVIDIA GPU (Vulkan)": "nvidia", "CPU": "cpu"}
 OUTPUT_FORMATS = {
     "MP4 H.265 10비트": ("h265_10", ".mp4"),
     "MKV H.265 10비트": ("h265_10", ".mkv"),
@@ -114,7 +116,9 @@ class VideoUpscalerApp:
         self.denoise_image_output = StringVar()
         self.denoise_image_strength = StringVar(value="약하게")
         self.denoise_image_format = StringVar(value="PNG (투명도/무손실)")
-        self.denoise_image_quality = StringVar(value="고품질")
+        self.denoise_image_quality = StringVar(value="최고 품질")
+        self.denoise_image_device = StringVar(value="NVIDIA GPU (Vulkan)")
+        self.denoise_image_original = StringVar(value="사용 안 함")
         self.denoise_image_overwrite = BooleanVar(value=False)
         self.denoise_image_format.trace_add("write", lambda *_: self._default_denoise_image_output())
 
@@ -124,6 +128,7 @@ class VideoUpscalerApp:
         self.clean_deband = BooleanVar(value=False)
         self.clean_codec = StringVar(value="H.265 10비트 (권장)")
         self.clean_quality = StringVar(value="고화질 / 큰 용량")
+        self.clean_original = StringVar(value="사용 안 함")
         self.clean_hardware_encode = BooleanVar(value=True)
         self.clean_info_text = StringVar(value="영상을 선택하면 원본 해상도와 FPS를 표시합니다.")
 
@@ -275,6 +280,10 @@ class VideoUpscalerApp:
         self._option(row, "제거 강도", self.denoise_image_strength, ["약하게", "보통", "강하게"])
         self._option(row, "출력 형식", self.denoise_image_format, list(IMAGE_OUTPUT_FORMATS))
         self._option(row, "저장 품질", self.denoise_image_quality, list(IMAGE_QUALITY))
+        extra = Frame(options)
+        extra.pack(fill=X, pady=5)
+        self._option(extra, "처리 장치", self.denoise_image_device, list(IMAGE_DENOISE_DEVICES), menu_width=24)
+        self._option(extra, "원본 유지", self.denoise_image_original, list(ORIGINAL_KEEP), menu_width=24)
         Checkbutton(options, text="기존 결과 덮어쓰기", variable=self.denoise_image_overwrite).pack(anchor="w")
         Label(options, text="원본 해상도 유지 · PNG/WebP 투명도 보존 · 강할수록 가는 선도 흐려질 수 있습니다.",
               anchor="w", fg="#666666").pack(fill=X, pady=6)
@@ -327,6 +336,10 @@ class VideoUpscalerApp:
         self._option(row, "제거 강도", self.clean_strength, list(CLEAN_STRENGTHS), menu_width=24)
         self._option(row, "출력 코덱", self.clean_codec, list(CLEAN_CODECS), menu_width=22)
         self._option(row, "압축 품질", self.clean_quality, list(QUALITY_MODES))
+        extra = Frame(options)
+        extra.pack(fill=X, pady=5)
+        self._option(extra, "원본 유지", self.clean_original, list(ORIGINAL_KEEP), menu_width=24)
+        Label(extra, text="원본 비율을 높이면 디테일과 노이즈가 함께 남습니다.", fg="#666666").pack(side=LEFT)
         checks = Frame(options)
         checks.pack(fill=X, pady=(7, 2))
         Checkbutton(
@@ -487,6 +500,7 @@ class VideoUpscalerApp:
             codec=CLEAN_CODECS[self.clean_codec.get()],
             quality=QUALITY_MODES[self.clean_quality.get()],
             hardware_encode=self.clean_hardware_encode.get(),
+            original_keep=ORIGINAL_KEEP[self.clean_original.get()],
         )
 
     def _is_image_tab(self) -> bool:
@@ -663,6 +677,8 @@ class VideoUpscalerApp:
             output_format=IMAGE_OUTPUT_FORMATS[self.denoise_image_format.get()],
             quality=IMAGE_QUALITY[self.denoise_image_quality.get()],
             overwrite=self.denoise_image_overwrite.get(),
+            denoise_device=IMAGE_DENOISE_DEVICES[self.denoise_image_device.get()],
+            detail_preserve=ORIGINAL_KEEP[self.denoise_image_original.get()],
         ) if denoise_only else self._image_settings())
 
         def emit_log(message: str) -> None:
