@@ -116,6 +116,7 @@ class VideoDenoiseSettings:
     quality: str = "high"
     hardware_encode: bool = True
     original_keep: int = 0
+    shadow_only: bool = False
 
 
 @dataclass
@@ -939,9 +940,18 @@ class VideoDenoisePipeline:
             raise PipelineError("지원하지 않는 영상 코덱입니다.")
         if not self.ffmpeg or not self.ffprobe:
             raise PipelineError("FFmpeg/ffprobe를 찾지 못했습니다.")
+        if self.settings.shadow_only:
+            metadata = subprocess.check_output([
+                self.ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                "stream=color_transfer,color_primaries", "-of", "json", self.settings.input_path,
+            ], creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0).decode()
+            if any(value in metadata for value in ("smpte2084", "arib-std-b67", "bt2020")):
+                raise PipelineError("암부 얼룩 완화는 SDR BT.709 전용입니다. HDR/BT.2020은 지원하지 않습니다.")
         output.parent.mkdir(parents=True, exist_ok=True)
 
     def _video_filter(self) -> str:
+        if self.settings.shadow_only:
+            return self._shadow_filter()
         filters = [self.FILTERS[self.settings.strength]]
         if self.settings.deband:
             filters.append("gradfun=strength=1.0:radius=16")
@@ -953,6 +963,24 @@ class VideoDenoisePipeline:
             return (f"format=yuv420p10le,split[orig][work];[work]{chain}[clean];"
                     f"[clean][orig]blend=all_expr='A*{1-weight:.4f}+B*{weight:.4f}'")
         return chain
+
+    def _shadow_filter(self) -> str:
+        # Work at 10 bits, including the mask. Luma values are limited-range
+        # BT.709: Y=64 black, Y=940 white. Fade the effect between Y=120..360.
+        spatial, tonal = {"light": (4, 0.025), "balanced": (10, 0.04),
+                          "strong": (18, 0.06)}[self.settings.strength]
+        keep = self.settings.original_keep / 100
+        if not 0 <= keep <= 1:
+            raise PipelineError("원본 유지 비율은 0~100이어야 합니다.")
+        mask = f"1023*clip((360-lum(X,Y))/240,0,1)*{1-keep:.4f}"
+        clean = (f"bilateral=sigmaS={spatial}:sigmaR={tonal}:planes=7,"
+                 f"{self.FILTERS[self.settings.strength]}")
+        if self.settings.deband:
+            clean += ",deband=1thr=0.006:2thr=0.006:3thr=0.006:range=12"
+        return ("scale=in_range=auto:out_range=tv,format=yuv444p10le,split=3[base][work][masksrc];"
+                f"[work]{clean}[clean];"
+                f"[masksrc]geq=lum='{mask}':cb='{mask}':cr='{mask}'[mask];"
+                "[base][clean][mask]maskedmerge,format=yuv420p10le")
 
     def _encoder_args(self) -> list[str]:
         quality = {

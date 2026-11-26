@@ -129,6 +129,7 @@ class VideoUpscalerApp:
         self.clean_codec = StringVar(value="H.265 10비트 (권장)")
         self.clean_quality = StringVar(value="고화질 / 큰 용량")
         self.clean_original = StringVar(value="사용 안 함")
+        self.clean_shadow_only = BooleanVar(value=False)
         self.clean_hardware_encode = BooleanVar(value=True)
         self.clean_info_text = StringVar(value="영상을 선택하면 원본 해상도와 FPS를 표시합니다.")
 
@@ -342,6 +343,8 @@ class VideoUpscalerApp:
         Label(extra, text="원본 비율을 높이면 디테일과 노이즈가 함께 남습니다.", fg="#666666").pack(side=LEFT)
         checks = Frame(options)
         checks.pack(fill=X, pady=(7, 2))
+        Checkbutton(options, text="암부 얼룩 완화 (SDR 전용 / 어두운 영역만 처리 / 밝은 영역 보호)",
+                    variable=self.clean_shadow_only).pack(anchor="w", pady=3)
         Checkbutton(
             checks,
             text="색 띠/밴딩도 완화 (그라데이션이 뭉칠 때만 사용)",
@@ -356,7 +359,7 @@ class VideoUpscalerApp:
             options,
             text=(
                 "해상도와 FPS는 바꾸지 않고 얼룩·압축 노이즈만 제거합니다. "
-                "제공한 clean 영상과 가장 가까운 값은 ‘균형’입니다."
+                "어두운 옷·배경의 넓은 얼룩은 ‘암부 얼룩 완화’와 균형 강도부터 시험하세요."
             ),
             anchor="w",
             fg="#666666",
@@ -501,6 +504,7 @@ class VideoUpscalerApp:
             quality=QUALITY_MODES[self.clean_quality.get()],
             hardware_encode=self.clean_hardware_encode.get(),
             original_keep=ORIGINAL_KEEP[self.clean_original.get()],
+            shadow_only=self.clean_shadow_only.get(),
         )
 
     def _is_image_tab(self) -> bool:
