@@ -91,6 +91,8 @@ class VideoUpscalerApp:
         self.backend = StringVar(value="AI (Real-ESRGAN)")
         self.output_format = StringVar(value="MP4 H.265 (용량 절약)")
         self.quality = StringVar(value="고화질 / 큰 용량")
+        self.upscale_preserve_bitrate = BooleanVar(value=True)
+        self.upscale_minimum_mbps = StringVar(value="0")
         self.interpolation = BooleanVar(value=False)
         self.hardware_encode = BooleanVar(value=True)
         self.keep_cache = BooleanVar(value=False)
@@ -129,6 +131,8 @@ class VideoUpscalerApp:
         self.clean_deband = BooleanVar(value=False)
         self.clean_codec = StringVar(value="H.265 10비트 (권장)")
         self.clean_quality = StringVar(value="고화질 / 큰 용량")
+        self.clean_preserve_bitrate = BooleanVar(value=True)
+        self.clean_minimum_mbps = StringVar(value="0")
         self.clean_original = StringVar(value="사용 안 함")
         self.clean_shadow_only = BooleanVar(value=False)
         self.clean_glow_only = BooleanVar(value=False)
@@ -217,6 +221,11 @@ class VideoUpscalerApp:
         self._option(row2, "처리 방식", self.backend, list(VIDEO_BACKENDS))
         self._option(row2, "출력 형식", self.output_format, list(OUTPUT_FORMATS), menu_width=25)
         self._option(row2, "압축 품질", self.quality, list(QUALITY_MODES))
+        bitrate_row = Frame(options)
+        bitrate_row.pack(fill=X, pady=4)
+        Checkbutton(bitrate_row, text="원본 영상 비트레이트 이상 유지 (CBR)", variable=self.upscale_preserve_bitrate).pack(side=LEFT)
+        Label(bitrate_row, text="최소 Mbps (0=원본)").pack(side=LEFT, padx=(12, 4))
+        Entry(bitrate_row, textvariable=self.upscale_minimum_mbps, width=7).pack(side=LEFT)
         Label(options, text="고정밀 AI: SDR 전용 · 10비트 출력 선택 · 노이즈/RIFE 끔. 일반 AI 중간 처리는 8비트입니다.", fg="#666666", anchor="w").pack(fill=X)
         detail_row = Frame(options)
         detail_row.pack(fill=X, pady=3)
@@ -341,6 +350,12 @@ class VideoUpscalerApp:
         self._option(row, "제거 강도", self.clean_strength, list(CLEAN_STRENGTHS), menu_width=24)
         self._option(row, "출력 코덱", self.clean_codec, list(CLEAN_CODECS), menu_width=22)
         self._option(row, "압축 품질", self.clean_quality, list(QUALITY_MODES))
+        rate_row = Frame(options)
+        rate_row.pack(fill=X, pady=4)
+        Checkbutton(rate_row, text="원본 영상 비트레이트 이상 유지 (CBR)", variable=self.clean_preserve_bitrate).pack(side=LEFT)
+        Label(rate_row, text="최소 Mbps (0=원본)").pack(side=LEFT, padx=(12, 4))
+        Entry(rate_row, textvariable=self.clean_minimum_mbps, width=7).pack(side=LEFT)
+        Label(options, text="CBR 켬: 압축 품질 대신 비트레이트 기준 · 채움 데이터 포함 가능 · 무손실 보장은 아님", fg="#666666", anchor="w").pack(fill=X)
         extra = Frame(options)
         extra.pack(fill=X, pady=5)
         self._option(extra, "원본 유지", self.clean_original, list(ORIGINAL_KEEP), menu_width=24)
@@ -482,6 +497,8 @@ class VideoUpscalerApp:
             keep_cache=self.keep_cache.get(),
             detail_preserve=DETAIL_PRESERVE[self.detail_preserve.get()],
             precision_device=PRECISION_DEVICES[self.precision_device.get()],
+            preserve_bitrate=self.upscale_preserve_bitrate.get(),
+            minimum_mbps=float(self.upscale_minimum_mbps.get().strip() or '0'),
         )
 
     def _choose_clean_input(self) -> None:
@@ -530,6 +547,8 @@ class VideoUpscalerApp:
             glow_only=self.clean_glow_only.get(),
             combined_clean=self.clean_combined.get(),
             filter_device=CLEAN_FILTER_DEVICES[self.clean_filter_device.get()],
+            preserve_bitrate=self.clean_preserve_bitrate.get(),
+            minimum_mbps=float(self.clean_minimum_mbps.get().strip() or '0'),
         )
 
     def _is_image_tab(self) -> bool:
@@ -658,7 +677,12 @@ class VideoUpscalerApp:
         self.run_button.config(state="disabled")
         self.stop_button.config(state="normal")
         self.status_text.set("작업 준비 중")
-        settings = self._settings()
+        try:
+            settings = self._settings()
+        except ValueError:
+            self._set_idle()
+            messagebox.showerror("비트레이트 입력 오류", "최소 Mbps는 0 이상의 숫자로 입력하세요.")
+            return
 
         def emit_log(message: str) -> None:
             self.events.put(("log", message))
@@ -757,7 +781,12 @@ class VideoUpscalerApp:
         self.run_button.config(state="disabled")
         self.stop_button.config(state="normal")
         self.status_text.set("노이즈 제거 준비 중")
-        settings = self._clean_settings()
+        try:
+            settings = self._clean_settings()
+        except ValueError:
+            self._set_idle()
+            messagebox.showerror("비트레이트 입력 오류", "최소 Mbps는 0 이상의 숫자로 입력하세요.")
+            return
 
         def emit_log(message: str) -> None:
             self.events.put(("log", message))

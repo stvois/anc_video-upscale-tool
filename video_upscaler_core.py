@@ -76,6 +76,8 @@ class UpscaleSettings:
     detail_preserve: int = 0
     precision_device: str = "auto"
     tile_size: int = 0
+    preserve_bitrate: bool = False
+    minimum_mbps: float = 0.0
 
 
 @dataclass
@@ -120,6 +122,8 @@ class VideoDenoiseSettings:
     glow_only: bool = False
     combined_clean: bool = False
     filter_device: str = "cpu"
+    preserve_bitrate: bool = False
+    minimum_mbps: float = 0.0
 
 
 @dataclass
@@ -438,6 +442,7 @@ class VideoUpscalePipeline:
                 self.cancel()
                 break
         return_code = self.current_process.wait()
+        self.current_process.stdout.close()
         self.current_process = None
         self._check_cancelled()
         if return_code != 0:
@@ -464,6 +469,8 @@ class VideoUpscalePipeline:
             raise PipelineError("입력 파일과 출력 파일은 같을 수 없습니다.")
         if self.settings.scale not in {2, 4}:
             raise PipelineError("확대 배율은 2배 또는 4배여야 합니다.")
+        if not 0 <= self.settings.minimum_mbps <= 1000:
+            raise PipelineError("최소 비트레이트는 0~1000 Mbps로 입력하세요.")
         if not 0 <= self.settings.detail_preserve <= 100:
             raise PipelineError("원본 디테일 보존 비율은 0~100이어야 합니다.")
         if not self.ffmpeg or not self.ffprobe:
@@ -812,6 +819,19 @@ class VideoUpscalePipeline:
         return self.interpolated_frames
 
     def _encoder_args(self) -> list[str]:
+        if self.settings.preserve_bitrate:
+            args = VideoDenoisePipeline(VideoDenoiseSettings(
+                self.settings.input_path, self.settings.output_path,
+                codec="h265" if self.settings.codec in {"h265", "h265_10"} else "h264",
+                hardware_encode=self.settings.hardware_encode,
+                preserve_bitrate=True, minimum_mbps=self.settings.minimum_mbps,
+            ), log=self.log)._encoder_args()
+            if self.settings.codec != "h265_10":
+                args = ['yuv420p' if v in {'p010le', 'yuv420p10le'} else v for v in args]
+                if '-profile:v' in args:
+                    index = args.index('-profile:v')
+                    del args[index:index+2]
+            return args
         if self.settings.codec == "h265_10":
             return VideoDenoisePipeline(VideoDenoiseSettings(
                 self.settings.input_path, self.settings.output_path,
@@ -886,6 +906,11 @@ class VideoUpscalePipeline:
         self._run_process(command, line_callback=on_line)
         if not output.exists() or output.stat().st_size == 0:
             raise PipelineError("최종 영상 파일이 생성되지 않았습니다.")
+        if self.settings.preserve_bitrate:
+            VideoDenoisePipeline(VideoDenoiseSettings(
+                self.settings.input_path, str(output), preserve_bitrate=True,
+                minimum_mbps=self.settings.minimum_mbps,
+            ), log=self.log)._verify_bitrate(output)
         self.log(f"완료: {output}")
         return output
 
@@ -946,6 +971,8 @@ class VideoDenoisePipeline:
             raise PipelineError("지원하지 않는 노이즈 제거 강도입니다.")
         if self.settings.codec not in {"h264", "h265"}:
             raise PipelineError("지원하지 않는 영상 코덱입니다.")
+        if not 0 <= self.settings.minimum_mbps <= 1000:
+            raise PipelineError("최소 비트레이트는 0~1000 Mbps로 입력하세요.")
         if not self.ffmpeg or not self.ffprobe:
             raise PipelineError("FFmpeg/ffprobe를 찾지 못했습니다.")
         if self.settings.filter_device not in {"cpu", "cuda"}:
@@ -1007,22 +1034,22 @@ class VideoDenoisePipeline:
 
     def _glow_filter(self) -> str:
         spatial, tonal, threshold = {
-            "light": (6, 0.018, 0.004), "balanced": (10, 0.025, 0.006),
-            "strong": (16, 0.04, 0.009),
+            "light": (14, 0.04, 0.006), "balanced": (28, 0.065, 0.009),
+            "strong": (44, 0.09, 0.012),
         }[self.settings.strength]
         keep = self.settings.original_keep / 100
         if not 0 <= keep <= 1:
             raise PipelineError("원본 유지 비율은 0~100이어야 합니다.")
         # Select blue/cyan midtones and glow, not every bright object. Mask
         # and edge protection stay 10-bit. Chroma planes have full resolution.
-        glow = (f"1023*clip((cb(X,Y)-516)/72,0,1)*clip((548-cr(X,Y))/72,0,1)"
+        glow = (f"1023*clip((cb(X,Y)-512)/48,0,1)*clip((556-cr(X,Y))/60,0,1)"
                 f"*clip((lum(X,Y)-140)/140,0,1)*{1-keep:.4f}")
         edge = "1023*clip(1-lum(X,Y)/120,0,1)"
         return ("scale=in_range=auto:out_range=tv,format=yuv444p10le,split=4[base][work][color][edges];"
                 f"[work]bilateral=sigmaS={spatial}:sigmaR={tonal}:planes=7,"
                 f"deband=1thr={threshold}:2thr={threshold}:3thr={threshold}:range=12[clean];"
                 f"[color]geq=lum='{glow}':cb='{glow}':cr='{glow}',gblur=sigma=2[glowmask];"
-                f"[edges]sobel=planes=1,geq=lum='{edge}':cb='{edge}':cr='{edge}'[edgemask];"
+                f"[edges]sobel=planes=1,dilation,geq=lum='{edge}':cb='{edge}':cr='{edge}'[edgemask];"
                 "[glowmask][edgemask]blend=all_expr='A*B/1023'[mask];"
                 "[base][clean][mask]maskedmerge,format=yuv420p10le")
 
@@ -1045,6 +1072,8 @@ class VideoDenoisePipeline:
                 "[base][clean][mask]maskedmerge,format=yuv420p10le")
 
     def _encoder_args(self) -> list[str]:
+        if self.settings.preserve_bitrate:
+            return self._bitrate_encoder_args()
         quality = {
             "high": {"cpu": "17", "nv": "16"},
             "balanced": {"cpu": "20", "nv": "19"},
@@ -1112,6 +1141,73 @@ class VideoDenoisePipeline:
             "yuv420p",
         ]
 
+    def _bitrate_policy(self) -> tuple[int, int]:
+        cached = getattr(self, '_bitrate_cache', None)
+        if cached is not None:
+            return cached
+        data = json.loads(subprocess.check_output([
+            self.ffprobe, '-v', 'error', '-select_streams', 'v:0', '-show_entries',
+            'stream=bit_rate,duration:format=duration', '-of', 'json', self.settings.input_path,
+        ], creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0))
+        stream = data['streams'][0]
+        bitrate = int(stream.get('bit_rate') or 0)
+        if bitrate <= 0:
+            duration = float(stream.get('duration') or data.get('format', {}).get('duration') or 0)
+            if duration <= 0:
+                raise PipelineError('원본 비트레이트를 계산할 수 없습니다.')
+            sizes = subprocess.check_output([
+                self.ffprobe, '-v', 'error', '-select_streams', 'v:0', '-show_entries',
+                'packet=size', '-of', 'csv=p=0', self.settings.input_path,
+            ], creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0).decode()
+            bitrate = int(sum(int(m.group(1)) for s in sizes.splitlines()
+                              if (m := re.match(r'^\s*(\d+)', s))) * 8 / duration)
+        floor = max(bitrate, round(self.settings.minimum_mbps * 1_000_000))
+        if floor <= 0:
+            raise PipelineError('유효한 원본 영상 비트레이트가 없습니다.')
+        # Startup buffering can make short-clip averages undershoot CBR targets.
+        target = ((int(floor * 1.15) + 999) // 1000) * 1000
+        self._bitrate_cache = (floor, target)
+        self.log(f'비트레이트 유지: 최소 {floor/1e6:.3f} Mbps / CBR 목표 {target/1e6:.3f} Mbps')
+        return self._bitrate_cache
+
+    def _bitrate_encoder_args(self) -> list[str]:
+        _, target = self._bitrate_policy()
+        rate = ['-b:v', str(target), '-minrate', str(target), '-maxrate', str(target), '-bufsize', str(target//2)]
+        if self.settings.hardware_encode and nvenc_available():
+            encoder = 'hevc_nvenc' if self.settings.codec == 'h265' else 'h264_nvenc'
+            pixel = 'p010le' if self.settings.codec == 'h265' else 'yuv420p'
+            args = ['-c:v', encoder, '-pix_fmt', pixel, '-preset', 'p7', '-tune', 'hq', '-rc:v', 'cbr', '-cbr_padding', '1'] + rate
+            if self.settings.codec == 'h265':
+                args += ['-profile:v', 'main10', '-tag:v', 'hvc1']
+            return args
+        if self.settings.codec == 'h265':
+            kbps = target // 1000
+            return ['-c:v', 'libx265', '-pix_fmt', 'yuv420p10le', '-preset', 'medium',
+                    '-tag:v', 'hvc1'] + rate + ['-x265-params', f'strict-cbr=1:hrd=1:vbv-maxrate={kbps}:vbv-bufsize={kbps//2}']
+        return ['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'slow'] + rate + ['-x264-params', 'nal-hrd=cbr:filler=1']
+
+    def _verify_bitrate(self, path: Path) -> None:
+        if not self.settings.preserve_bitrate:
+            return
+        floor, _ = self._bitrate_policy()
+        data = json.loads(subprocess.check_output([
+            self.ffprobe, '-v', 'error', '-select_streams', 'v:0', '-show_entries',
+            'stream=bit_rate', '-of', 'json', str(path),
+        ], creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0))
+        rate = int(data['streams'][0].get('bit_rate') or 0)
+        if rate <= 0:
+            # Matroska generally does not store a per-stream bitrate field.
+            duration = probe_video(str(path), self.ffprobe).duration
+            packets = subprocess.check_output([
+                self.ffprobe, '-v', 'error', '-select_streams', 'v:0', '-show_entries',
+                'packet=size', '-of', 'csv=p=0', str(path),
+            ], creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0).decode()
+            rate = int(sum(int(m.group(1)) for s in packets.splitlines()
+                           if (m := re.match(r'^\s*(\d+)', s))) * 8 / max(.001, duration))
+        if rate < floor:
+            raise PipelineError(f'출력 비트레이트 {rate/1e6:.3f} Mbps가 설정 최소 {floor/1e6:.3f} Mbps보다 낮습니다. 결과를 완료로 처리하지 않았습니다.')
+        self.log(f'출력 비트레이트 확인: {rate/1e6:.3f} Mbps (최소 {floor/1e6:.3f} 이상)')
+
     def _run_process(self, command: list[str]) -> None:
         self._check_cancelled()
         startupinfo = None
@@ -1149,6 +1245,7 @@ class VideoDenoisePipeline:
                 self.cancel()
                 break
         return_code = self.current_process.wait()
+        self.current_process.stdout.close()
         self.current_process = None
         self._check_cancelled()
         if return_code != 0:
@@ -1175,6 +1272,7 @@ class VideoDenoisePipeline:
                 self._run_gpu(partial)
                 if not partial.is_file() or partial.stat().st_size == 0:
                     raise PipelineError("GPU 통합 처리 결과가 생성되지 않았습니다.")
+                self._verify_bitrate(partial)
                 os.replace(partial, output)
             finally:
                 if partial.exists():
@@ -1223,6 +1321,7 @@ class VideoDenoisePipeline:
             self._run_process(command)
             if not partial.is_file() or partial.stat().st_size == 0:
                 raise PipelineError("노이즈 제거 결과 파일이 생성되지 않았습니다.")
+            self._verify_bitrate(partial)
             os.replace(partial, output)
         finally:
             if partial.exists():

@@ -36,10 +36,19 @@ def clean(image, strength, keep, banding=False):
     glow = blue * cyan * ((y - .09) / .16).clamp(0, 1)
     dx = F.pad((y[:, :, :, 1:] - y[:, :, :, :-1]).abs(), (0, 1, 0, 0))
     dy = F.pad((y[:, :, 1:, :] - y[:, :, :-1, :]).abs(), (0, 0, 0, 1))
-    edge = (1 - F.max_pool2d(dx + dy, 3, stride=1, padding=1) / .06).clamp(0, 1)
+    edge = (1 - F.max_pool2d(dx + dy, 9, stride=1, padding=4) / .06).clamp(0, 1)
     glow = box(glow, 2) * edge
-    mask = torch.maximum(shadow * .7, glow * .7) * (1 - keep / 100)
-    filtered = guided(image, radius, epsilon)
+    shadow_weight, glow_weight = shadow * .7, glow * .95
+    mask = torch.maximum(shadow_weight, glow_weight) * (1 - keep / 100)
+    shadow_clean = guided(image, radius, epsilon)
+    # Low-frequency glow stripes survived the former small guided filter.
+    # A larger, more permissive pass smooths these gradients while the dilated
+    # edge mask keeps necklace/hand outlines out of the strong pass.
+    glow_radius, glow_epsilon = {'light': (14, .002), 'balanced': (26, .004),
+                                'strong': (40, .008)}[strength]
+    glow_clean = guided(image, glow_radius, glow_epsilon)
+    total = (shadow_weight + glow_weight).clamp_min(1e-6)
+    filtered = (shadow_clean * shadow_weight + glow_clean * glow_weight) / total
     if banding:
         filtered = filtered * .8 + guided(filtered, 4, .0001) * .2
     return (image + (filtered - image) * mask).clamp(0, 1)
