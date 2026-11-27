@@ -8,6 +8,27 @@ from video_upscaler_core import VideoDenoisePipeline, VideoDenoiseSettings, find
 
 class ShadowFilterTests(unittest.TestCase):
     @unittest.skipUnless(find_ffmpeg(), 'FFmpeg required')
+    def test_combined_original_retention_uses_original_input(self):
+        source = ("nullsrc=size=64x32:rate=1,format=yuv444p10le,"
+                  "geq=lum='if(lt(X,W/2),120,450)+mod(X*13+Y*7,17)':cb=650:cr=480")
+        def render(graph):
+            data = array.array('H')
+            data.frombytes(subprocess.check_output([
+                find_ffmpeg(), '-v', 'error', '-f', 'lavfi', '-i', source,
+                '-vf', graph + ',format=yuv444p10le', '-frames:v', '1',
+                '-f', 'rawvideo', '-pix_fmt', 'yuv444p10le', '-',
+            ]))
+            return data[:64*32]
+        original = render('null')
+        retained = render(VideoDenoisePipeline(VideoDenoiseSettings(
+            'unused', 'unused', combined_clean=True, original_keep=100))._video_filter())
+        self.assertEqual(original, retained)
+        cleaned = render(VideoDenoisePipeline(VideoDenoiseSettings(
+            'unused', 'unused', combined_clean=True))._video_filter())
+        for select in (lambda x: x < 24, lambda x: x >= 40):
+            self.assertGreater(sum(abs(original[i]-cleaned[i]) for i in range(len(original)) if select(i % 64)), 0)
+
+    @unittest.skipUnless(find_ffmpeg(), 'FFmpeg required')
     def test_glow_mask_changes_cyan_but_protects_neutral_and_original(self):
         source = ("nullsrc=size=64x32:rate=1,format=yuv444p10le,"
                   "geq=lum='450+mod(X*13+Y*7,17)':cb='if(lt(X,W/2),650,512)':cr=480")

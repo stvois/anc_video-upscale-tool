@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from functools import lru_cache
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from fractions import Fraction
 from pathlib import Path
 from typing import Callable, Iterable
@@ -118,6 +118,7 @@ class VideoDenoiseSettings:
     original_keep: int = 0
     shadow_only: bool = False
     glow_only: bool = False
+    combined_clean: bool = False
 
 
 @dataclass
@@ -941,9 +942,9 @@ class VideoDenoisePipeline:
             raise PipelineError("지원하지 않는 영상 코덱입니다.")
         if not self.ffmpeg or not self.ffprobe:
             raise PipelineError("FFmpeg/ffprobe를 찾지 못했습니다.")
-        if self.settings.shadow_only and self.settings.glow_only:
-            raise PipelineError("암부 얼룩 완화와 발광부 완화는 한 번에 하나만 선택하세요.")
-        if self.settings.shadow_only or self.settings.glow_only:
+        if sum((self.settings.shadow_only, self.settings.glow_only, self.settings.combined_clean)) > 1:
+            raise PipelineError("암부·발광부·통합 완화 중 하나만 선택하세요.")
+        if self.settings.shadow_only or self.settings.glow_only or self.settings.combined_clean:
             metadata = subprocess.check_output([
                 self.ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries",
                 "stream=color_transfer,color_primaries", "-of", "json", self.settings.input_path,
@@ -953,6 +954,8 @@ class VideoDenoisePipeline:
         output.parent.mkdir(parents=True, exist_ok=True)
 
     def _video_filter(self) -> str:
+        if self.settings.combined_clean:
+            return self._combined_filter()
         if self.settings.glow_only:
             return self._glow_filter()
         if self.settings.shadow_only:
@@ -968,6 +971,24 @@ class VideoDenoisePipeline:
             return (f"format=yuv420p10le,split[orig][work];[work]{chain}[clean];"
                     f"[clean][orig]blend=all_expr='A*{1-weight:.4f}+B*{weight:.4f}'")
         return chain
+
+    def _combined_filter(self) -> str:
+        keep = self.settings.original_keep / 100
+        if not 0 <= keep <= 1:
+            raise PipelineError("원본 유지 비율은 0~100이어야 합니다.")
+        # Each selective stage is reduced to 70% effect to soften overlap.
+        # User original retention is applied once, against the input frame.
+        stage = VideoDenoisePipeline(replace(self.settings, original_keep=30,
+                                            combined_clean=False))
+        def renamed(graph: str, prefix: str) -> str:
+            graph = graph.removesuffix(",format=yuv420p10le")
+            return re.sub(r"\[([A-Za-z0-9_]+)\]", lambda m: f"[{prefix}{m.group(1)}]", graph)
+        shadow = renamed(stage._shadow_filter(), "s_")
+        glow = renamed(stage._glow_filter(), "g_")
+        return ("scale=in_range=auto:out_range=tv,format=yuv444p10le,split[combined_input][original_input];"
+                f"[combined_input]{shadow}[shadow_done];[shadow_done]{glow}[clean_done];"
+                f"[clean_done][original_input]blend=all_expr='A*{1-keep:.4f}+B*{keep:.4f}',"
+                "format=yuv420p10le")
 
     def _glow_filter(self) -> str:
         spatial, tonal, threshold = {
