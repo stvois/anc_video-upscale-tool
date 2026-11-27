@@ -57,6 +57,7 @@ VIDEO_BACKENDS = {**BACKENDS, "고정밀 AI (16비트 SDR)": "precision"}
 PRECISION_DEVICES = {"자동 (NVIDIA 우선)": "auto", "NVIDIA GPU (CUDA)": "cuda", "CPU": "cpu"}
 ORIGINAL_KEEP = {"사용 안 함": 0, "원본 30%": 30, "원본 50%": 50, "원본 70% (형태 우선)": 70}
 IMAGE_DENOISE_DEVICES = {"NVIDIA GPU (Vulkan)": "nvidia", "CPU": "cpu"}
+CLEAN_FILTER_DEVICES = {"CPU (기존 방식)": "cpu", "NVIDIA GPU (CUDA)": "cuda"}
 OUTPUT_FORMATS = {
     "MP4 H.265 10비트": ("h265_10", ".mp4"),
     "MKV H.265 10비트": ("h265_10", ".mkv"),
@@ -132,6 +133,7 @@ class VideoUpscalerApp:
         self.clean_shadow_only = BooleanVar(value=False)
         self.clean_glow_only = BooleanVar(value=False)
         self.clean_combined = BooleanVar(value=False)
+        self.clean_filter_device = StringVar(value="CPU (기존 방식)")
         self.clean_hardware_encode = BooleanVar(value=True)
         self.clean_info_text = StringVar(value="영상을 선택하면 원본 해상도와 FPS를 표시합니다.")
 
@@ -342,7 +344,8 @@ class VideoUpscalerApp:
         extra = Frame(options)
         extra.pack(fill=X, pady=5)
         self._option(extra, "원본 유지", self.clean_original, list(ORIGINAL_KEEP), menu_width=24)
-        Label(extra, text="원본 비율을 높이면 디테일과 노이즈가 함께 남습니다.", fg="#666666").pack(side=LEFT)
+        self._option(extra, "통합 필터", self.clean_filter_device, list(CLEAN_FILTER_DEVICES), menu_width=24)
+        Label(options, text="NVIDIA 필터는 통합 모드 전용 · 고정밀 CUDA 엔진 필요 · CPU와 결과 차이 있음", fg="#666666", anchor="w").pack(fill=X)
         checks = Frame(options)
         checks.pack(fill=X, pady=(7, 2))
         Checkbutton(options, text="암부 얼룩 완화 (SDR 전용 / 어두운 영역만 처리 / 밝은 영역 보호)",
@@ -361,7 +364,7 @@ class VideoUpscalerApp:
         ).pack(side=LEFT, padx=(0, 18))
         Checkbutton(
             checks,
-            text="NVIDIA 하드웨어 인코딩",
+            text="NVIDIA 하드웨어 인코딩 (최종 압축)",
             variable=self.clean_hardware_encode,
         ).pack(side=LEFT)
         Label(
@@ -378,6 +381,8 @@ class VideoUpscalerApp:
         modes = {"shadow": self.clean_shadow_only, "glow": self.clean_glow_only,
                  "combined": self.clean_combined}
         if modes[name].get():
+            if name != "combined":
+                self.clean_filter_device.set("CPU (기존 방식)")
             for key, variable in modes.items():
                 if key != name:
                     variable.set(False)
@@ -524,6 +529,7 @@ class VideoUpscalerApp:
             shadow_only=self.clean_shadow_only.get(),
             glow_only=self.clean_glow_only.get(),
             combined_clean=self.clean_combined.get(),
+            filter_device=CLEAN_FILTER_DEVICES[self.clean_filter_device.get()],
         )
 
     def _is_image_tab(self) -> bool:

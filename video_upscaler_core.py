@@ -119,6 +119,7 @@ class VideoDenoiseSettings:
     shadow_only: bool = False
     glow_only: bool = False
     combined_clean: bool = False
+    filter_device: str = "cpu"
 
 
 @dataclass
@@ -921,7 +922,12 @@ class VideoDenoisePipeline:
         process = self.current_process
         if process and process.poll() is None:
             try:
-                process.terminate()
+                if self.settings.filter_device == "cuda" and os.name == "nt":
+                    subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   creationflags=subprocess.CREATE_NO_WINDOW)
+                else:
+                    process.terminate()
             except OSError:
                 pass
 
@@ -942,6 +948,15 @@ class VideoDenoisePipeline:
             raise PipelineError("지원하지 않는 영상 코덱입니다.")
         if not self.ffmpeg or not self.ffprobe:
             raise PipelineError("FFmpeg/ffprobe를 찾지 못했습니다.")
+        if self.settings.filter_device not in {"cpu", "cuda"}:
+            raise PipelineError("지원하지 않는 필터 처리 장치입니다.")
+        if self.settings.filter_device == "cuda":
+            if not 0 <= self.settings.original_keep <= 100:
+                raise PipelineError("원본 유지 비율은 0~100이어야 합니다.")
+            if not self.settings.combined_clean:
+                raise PipelineError("NVIDIA 필터 처리는 '통합 완화'를 선택해 주세요. 단독 모드는 CPU를 사용하세요.")
+            if not (USER_DATA_DIR / "precision/Scripts/python.exe").is_file():
+                raise PipelineError("상단의 고정밀 엔진 설치로 CUDA 엔진을 설치하세요.")
         if sum((self.settings.shadow_only, self.settings.glow_only, self.settings.combined_clean)) > 1:
             raise PipelineError("암부·발광부·통합 완화 중 하나만 선택하세요.")
         if self.settings.shadow_only or self.settings.glow_only or self.settings.combined_clean:
@@ -1125,6 +1140,11 @@ class VideoDenoisePipeline:
                     if raw_time != "N/A":
                         ratio = _parse_ffmpeg_time(raw_time) / max(0.001, self.info.duration)
                         self.progress(min(0.99, ratio), "노이즈 제거 및 인코딩")
+                elif line.startswith("frame_gpu=") and self.info is not None:
+                    frame = int(line.split("=", 1)[1])
+                    self.progress(min(.99, frame / max(1, self.info.frame_count)), "NVIDIA 통합 필터 처리")
+                elif line.startswith(("CUDA combined", "CUDA filter")):
+                    self.log(line)
             if self.cancel_event.is_set():
                 self.cancel()
                 break
@@ -1149,6 +1169,19 @@ class VideoDenoisePipeline:
             f"{format_duration(self.info.duration)}"
         )
         self.log("해상도와 FPS를 유지하며 노이즈만 제거합니다.")
+        if self.settings.filter_device == "cuda":
+            self.log("통합 필터: NVIDIA CUDA / 최종 인코딩 장치는 별도 설정입니다.")
+            try:
+                self._run_gpu(partial)
+                if not partial.is_file() or partial.stat().st_size == 0:
+                    raise PipelineError("GPU 통합 처리 결과가 생성되지 않았습니다.")
+                os.replace(partial, output)
+            finally:
+                if partial.exists():
+                    partial.unlink()
+            self.progress(1.0, "완료")
+            self.log(f"완료: {output}")
+            return output
         self.log(f"필터: {self._video_filter()}")
         command = [
             self.ffmpeg,
@@ -1197,6 +1230,52 @@ class VideoDenoisePipeline:
         self.progress(1.0, "완료")
         self.log(f"완료: {output}")
         return output
+
+
+    def _run_gpu(self, output: Path) -> None:
+        assert self.info is not None
+        metadata = json.loads(subprocess.check_output([
+            self.ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries",
+            "stream=avg_frame_rate,r_frame_rate,color_transfer,color_primaries,color_space",
+            "-of", "json", self.settings.input_path,
+        ], creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))['streams'][0]
+        average = _rate_to_float(metadata.get('avg_frame_rate'))
+        rate = _rate_to_float(metadata.get('r_frame_rate'))
+        if abs(average-rate) > .01:
+            raise PipelineError("NVIDIA 통합 모드는 고정 FPS 영상용입니다. 가변 FPS는 CPU 필터를 사용하세요.")
+        width, height, fps = self.info.width, self.info.height, self.info.fps
+        decode = [self.ffmpeg, '-v', 'error', '-i', self.settings.input_path,
+                  '-map', '0:v:0', '-fps_mode', 'passthrough', '-pix_fmt', 'rgb48le',
+                  '-f', 'rawvideo', 'pipe:1']
+        encode = [self.ffmpeg, '-v', 'error', '-y', '-f', 'rawvideo', '-pixel_format', 'rgb48le',
+                  '-video_size', f'{width}x{height}', '-framerate', f'{fps:.8f}', '-i', 'pipe:0',
+                  '-i', self.settings.input_path, '-map', '0:v:0', '-map', '1:a?']
+        subtitles = [s for s in self.info.subtitle_streams if s.get('codec_name') in TEXT_SUBTITLE_CODECS]
+        for stream in subtitles:
+            encode += ['-map', f"1:{stream['index']}"]
+        if len(subtitles) < len(self.info.subtitle_streams):
+            self.log("주의: MP4 비호환 이미지 자막은 제외됩니다.")
+        if subtitles:
+            encode += ['-c:s', 'mov_text']
+        encode += ['-vf', 'scale=out_color_matrix=bt709:out_range=tv', '-c:a', 'aac', '-b:a', '320k']
+        encode += self._encoder_args()
+        encode += ['-map_metadata', '1', '-map_chapters', '1', '-colorspace', 'bt709',
+                   '-color_primaries', metadata.get('color_primaries', 'bt709'),
+                   '-color_trc', metadata.get('color_transfer', 'bt709'),
+                   '-color_range', 'tv', '-movflags', '+faststart', str(output)]
+        job = {'width': width, 'height': height, 'strength': self.settings.strength,
+               'keep': self.settings.original_keep, 'banding': self.settings.deband,
+               'decode': decode, 'encode': encode}
+        directory = USER_DATA_DIR / 'gpu_jobs'
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f'{uuid.uuid4().hex}.json'
+        try:
+            path.write_text(json.dumps(job), encoding='utf-8')
+            self._run_process([str(USER_DATA_DIR / 'precision/Scripts/python.exe'),
+                               str(RESOURCE_DIR / 'gpu_clean.py'), str(path)])
+        finally:
+            if path.exists():
+                path.unlink()
 
 
 class ImageUpscalePipeline:

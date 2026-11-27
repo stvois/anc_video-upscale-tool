@@ -40,6 +40,7 @@ try {
         --add-data "setup_video_ai_engines.ps1;." `
         --add-data "setup_precision.ps1;." `
         --add-data "precision_upscale.py;." `
+        --add-data "gpu_clean.py;." `
         "video_upscaler_gui.py"
 
     if ($LASTEXITCODE -ne 0) {
