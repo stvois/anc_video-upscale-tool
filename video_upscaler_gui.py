@@ -130,6 +130,7 @@ class VideoUpscalerApp:
         self.clean_quality = StringVar(value="고화질 / 큰 용량")
         self.clean_original = StringVar(value="사용 안 함")
         self.clean_shadow_only = BooleanVar(value=False)
+        self.clean_glow_only = BooleanVar(value=False)
         self.clean_hardware_encode = BooleanVar(value=True)
         self.clean_info_text = StringVar(value="영상을 선택하면 원본 해상도와 FPS를 표시합니다.")
 
@@ -344,7 +345,11 @@ class VideoUpscalerApp:
         checks = Frame(options)
         checks.pack(fill=X, pady=(7, 2))
         Checkbutton(options, text="암부 얼룩 완화 (SDR 전용 / 어두운 영역만 처리 / 밝은 영역 보호)",
-                    variable=self.clean_shadow_only).pack(anchor="w", pady=3)
+                    variable=self.clean_shadow_only,
+                    command=lambda: self.clean_glow_only.set(False) if self.clean_shadow_only.get() else None).pack(anchor="w", pady=3)
+        Checkbutton(options, text="발광부 갈라짐 완화 (SDR 청색·시안 빛 번짐 / 윤곽 보호)",
+                    variable=self.clean_glow_only,
+                    command=lambda: self.clean_shadow_only.set(False) if self.clean_glow_only.get() else None).pack(anchor="w", pady=3)
         Checkbutton(
             checks,
             text="색 띠/밴딩도 완화 (그라데이션이 뭉칠 때만 사용)",
@@ -505,6 +510,7 @@ class VideoUpscalerApp:
             hardware_encode=self.clean_hardware_encode.get(),
             original_keep=ORIGINAL_KEEP[self.clean_original.get()],
             shadow_only=self.clean_shadow_only.get(),
+            glow_only=self.clean_glow_only.get(),
         )
 
     def _is_image_tab(self) -> bool:

@@ -117,6 +117,7 @@ class VideoDenoiseSettings:
     hardware_encode: bool = True
     original_keep: int = 0
     shadow_only: bool = False
+    glow_only: bool = False
 
 
 @dataclass
@@ -940,16 +941,20 @@ class VideoDenoisePipeline:
             raise PipelineError("지원하지 않는 영상 코덱입니다.")
         if not self.ffmpeg or not self.ffprobe:
             raise PipelineError("FFmpeg/ffprobe를 찾지 못했습니다.")
-        if self.settings.shadow_only:
+        if self.settings.shadow_only and self.settings.glow_only:
+            raise PipelineError("암부 얼룩 완화와 발광부 완화는 한 번에 하나만 선택하세요.")
+        if self.settings.shadow_only or self.settings.glow_only:
             metadata = subprocess.check_output([
                 self.ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries",
                 "stream=color_transfer,color_primaries", "-of", "json", self.settings.input_path,
             ], creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0).decode()
             if any(value in metadata for value in ("smpte2084", "arib-std-b67", "bt2020")):
-                raise PipelineError("암부 얼룩 완화는 SDR BT.709 전용입니다. HDR/BT.2020은 지원하지 않습니다.")
+                raise PipelineError("선택 영역 완화는 SDR 전용입니다. HDR/BT.2020은 지원하지 않습니다.")
         output.parent.mkdir(parents=True, exist_ok=True)
 
     def _video_filter(self) -> str:
+        if self.settings.glow_only:
+            return self._glow_filter()
         if self.settings.shadow_only:
             return self._shadow_filter()
         filters = [self.FILTERS[self.settings.strength]]
@@ -963,6 +968,27 @@ class VideoDenoisePipeline:
             return (f"format=yuv420p10le,split[orig][work];[work]{chain}[clean];"
                     f"[clean][orig]blend=all_expr='A*{1-weight:.4f}+B*{weight:.4f}'")
         return chain
+
+    def _glow_filter(self) -> str:
+        spatial, tonal, threshold = {
+            "light": (6, 0.018, 0.004), "balanced": (10, 0.025, 0.006),
+            "strong": (16, 0.04, 0.009),
+        }[self.settings.strength]
+        keep = self.settings.original_keep / 100
+        if not 0 <= keep <= 1:
+            raise PipelineError("원본 유지 비율은 0~100이어야 합니다.")
+        # Select blue/cyan midtones and glow, not every bright object. Mask
+        # and edge protection stay 10-bit. Chroma planes have full resolution.
+        glow = (f"1023*clip((cb(X,Y)-516)/72,0,1)*clip((548-cr(X,Y))/72,0,1)"
+                f"*clip((lum(X,Y)-140)/140,0,1)*{1-keep:.4f}")
+        edge = "1023*clip(1-lum(X,Y)/120,0,1)"
+        return ("scale=in_range=auto:out_range=tv,format=yuv444p10le,split=4[base][work][color][edges];"
+                f"[work]bilateral=sigmaS={spatial}:sigmaR={tonal}:planes=7,"
+                f"deband=1thr={threshold}:2thr={threshold}:3thr={threshold}:range=12[clean];"
+                f"[color]geq=lum='{glow}':cb='{glow}':cr='{glow}',gblur=sigma=2[glowmask];"
+                f"[edges]sobel=planes=1,geq=lum='{edge}':cb='{edge}':cr='{edge}'[edgemask];"
+                "[glowmask][edgemask]blend=all_expr='A*B/1023'[mask];"
+                "[base][clean][mask]maskedmerge,format=yuv420p10le")
 
     def _shadow_filter(self) -> str:
         # Work at 10 bits, including the mask. Luma values are limited-range
